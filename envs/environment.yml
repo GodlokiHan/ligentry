@@ -1,0 +1,11 @@
+name: biosim
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - rdkit
+  - openbabel
+  - vina
+  - meeko
+  - requests
+  - pip
