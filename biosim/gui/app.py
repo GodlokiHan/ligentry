@@ -1,14 +1,14 @@
 """biosim desktop application (Qt)."""
 from __future__ import annotations
 
+import json
 import re
 import sys
 import time
 from pathlib import Path
 
-from biosim.gui.worker import DockWorker  # imports RDKit before Qt widgets
 import psutil
-from PySide6.QtCore import QSettings, Qt, QTimer
+from PySide6.QtCore import QProcess, QSettings, Qt, QTimer
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QFileDialog, QFormLayout, QHBoxLayout,
@@ -38,7 +38,9 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.resize(1400, 850)
-        self.worker: DockWorker | None = None
+        self.proc: QProcess | None = None  # docking runs in its own process (biosim.gui.job)
+        self._buffer = ""  # partial output line from the job
+        self._last_error = ""
         self.workdir = Path("runs/gui")
         self.pdb_id = ""
         self.rows: list[dict] = []  # table row i <-> self.rows[i]
@@ -597,23 +599,100 @@ class MainWindow(QMainWindow):
         self.elapsed_label.setText("Elapsed 00:00")
         self.remaining_label.setText("Setting up ...")
 
-        self.worker = DockWorker(
-            pdb_id, chembl, smiles_text, self.n_spin.value(),
-            self.exh_spin.value(), self.workdir,
-            enumerate_stereo=self.stereo_check.isChecked(),
-            max_isomers=self.iso_spin.value(),
-        )
-        self.worker.log.connect(self.on_log)
-        self.worker.docked.connect(self.on_done)
-        self.worker.failed.connect(self.on_failed)
-        self.worker.finished.connect(self.on_finished)
-        self.worker.start()
+        if not self._launch_job(chembl, smiles_text):
+            self.running = False
+            self.t_start = None
+            self.progress.setRange(0, 1)
+            self.progress.setValue(0)
+            self.remaining_label.setText("Remaining -")
+            self.update_actions()
+
+    def _launch_job(self, chembl: str, smiles_text: str) -> bool:
+        """Start docking in a separate process so the window never shares a GIL with Vina."""
+        spec = {
+            "pdb_id": self.pdb_id,
+            "chembl_target": chembl,
+            "smiles_text": smiles_text,
+            "n_ligands": self.n_spin.value(),
+            "exhaustiveness": self.exh_spin.value(),
+            "workdir": str(self.workdir.resolve()),
+            "enumerate_stereo": self.stereo_check.isChecked(),
+            "max_isomers": self.iso_spin.value(),
+        }
+        try:
+            self.workdir.mkdir(parents=True, exist_ok=True)
+            (self.workdir / "STOP").unlink(missing_ok=True)
+            job_path = self.workdir / "job.json"  # also a record of the run's settings
+            job_path.write_text(json.dumps(spec, indent=2))
+        except OSError as exc:
+            QMessageBox.critical(self, "biosim", f"Could not prepare the run folder: {exc}")
+            return False
+
+        self._buffer = ""
+        self._last_error = ""
+        self.proc = QProcess(self)
+        self.proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        self.proc.readyReadStandardOutput.connect(self.on_proc_output)
+        self.proc.finished.connect(self.on_proc_finished)
+        self.proc.errorOccurred.connect(self.on_proc_error)
+        self.proc.start(sys.executable, ["-u", "-m", "biosim.gui.job", str(job_path)])
+        return True
+
+    def on_proc_output(self) -> None:
+        if self.proc is None:
+            return
+        self._buffer += bytes(self.proc.readAllStandardOutput()).decode("utf-8", errors="replace")
+        *lines, self._buffer = self._buffer.split("\n")
+        for line in lines:
+            self._handle_line(line)
+
+    def _handle_line(self, line: str) -> None:
+        line = line.rstrip("\r")
+        if not line.strip() or line.startswith("WARNING: At low exhaustiveness"):
+            return  # harmless Vina notice
+        if line.startswith("ERROR: "):
+            self._last_error = line[len("ERROR: "):]
+        self.on_log(line)
+
+    def on_proc_finished(self, exit_code: int, exit_status) -> None:
+        if self._buffer.strip():
+            self._handle_line(self._buffer)
+        self._buffer = ""
+        crashed = exit_status == QProcess.ExitStatus.CrashExit
+        if exit_code == 0 and not crashed:
+            try:
+                _pdb, rows = runio.load_run(self.workdir)
+            except (runio.RunFolderError, OSError) as exc:
+                self.on_failed(f"Docking finished but the results could not be read: {exc}")
+            else:
+                self.on_done(rows)
+        else:
+            self.on_failed(
+                self._last_error
+                or ("The docking process crashed." if crashed
+                    else f"The docking process failed (exit code {exit_code}).")
+            )
+        self.on_finished()
+        (self.workdir / "STOP").unlink(missing_ok=True)
+        if self.proc is not None:
+            self.proc.deleteLater()
+            self.proc = None
+
+    def on_proc_error(self, error) -> None:
+        if error == QProcess.ProcessError.FailedToStart:  # 'finished' never fires in this case
+            self.on_failed("Could not start the docking process.")
+            self.on_finished()
 
     def stop(self) -> None:
-        if not self.running or self.stop_requested or self.worker is None:
+        if not self.running or self.stop_requested or self.proc is None:
             return
         self.stop_requested = True
-        self.worker.request_stop()
+        try:
+            (self.workdir / "STOP").write_text("stop\n")  # the job polls for this file
+        except OSError as exc:
+            self.stop_requested = False
+            QMessageBox.warning(self, "biosim", f"Could not signal the job to stop: {exc}")
+            return
         self.log.appendPlainText("Stop requested: finishing the current docking step ...")
         self.remaining_label.setText("Stopping ...")
         self.update_actions()
