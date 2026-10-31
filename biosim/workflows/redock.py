@@ -9,13 +9,19 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections import Counter
 from pathlib import Path
 
 import requests
+from rdkit import RDLogger
 
 import biosim.plugins  # noqa: F401  (registers plugins)
 from biosim.core.plugin import get_plugin
 from biosim.data.pdb import download_pdb, extract_pocket
+
+# Best-effort silencing of RDKit's harmless "More than one matching pattern" warnings.
+RDLogger.DisableLog("rdApp.warning")
+logging.getLogger("rdkit").setLevel(logging.ERROR)
 
 log = logging.getLogger("biosim.redock")
 
@@ -50,6 +56,23 @@ def _fetch_ccd_smiles(resname: str) -> str:
     raise ValueError(
         f"No SMILES found for ligand '{resname}'. Pass one explicitly with --template-smiles."
     )
+
+
+def _template_from_smiles(smiles: str):
+    """Parse a template SMILES and strip every hydrogen, including stereo-defining ones.
+
+    RCSB SMILES such as [H]/N=C(/N)c1ccccc1 keep an explicit H to encode C=N
+    geometry. RDKit preserves such an H as a real atom by default, which breaks
+    heavy-atom matching against the crystal coordinates.
+    """
+    from rdkit import Chem
+
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        raise ValueError(f"RDKit could not parse template SMILES: {smiles}")
+    params = Chem.RemoveHsParameters()
+    params.removeDefiningBondStereo = True
+    return Chem.RemoveHs(mol, params)
 
 
 def _crystal_ligand_atoms(pdb_path: Path, resname: str) -> list[tuple[str, float, float, float]]:
@@ -87,15 +110,100 @@ def _pdb_block(atoms: list[tuple[str, float, float, float]]) -> str:
     return "\n".join(lines)
 
 
+def _mol_from_atoms_geometric(atoms, template, min_bond: float = 1.0, max_bond: float = 1.95):
+    """Fallback: map template atoms onto coordinates by element and bond length.
+
+    Does not rely on RDKit's inferred bonds. Returns a copy of the template with
+    the mapped coordinates as its conformer.
+    """
+    from rdkit import Chem
+    from rdkit.Geometry import Point3D
+
+    n = template.GetNumAtoms()
+    if len(atoms) != n:
+        raise ValueError(f"{len(atoms)} coordinate atoms vs {n} template atoms")
+
+    elements = [a[0] for a in atoms]
+    coords = [(a[1], a[2], a[3]) for a in atoms]
+
+    def dist(i: int, j: int) -> float:
+        return sum((coords[i][k] - coords[j][k]) ** 2 for k in range(3)) ** 0.5
+
+    # Breadth-first order so every atom (after the first of each fragment) has a
+    # neighbour that is already placed.
+    order: list[int] = []
+    seen: set[int] = set()
+    for start in range(n):
+        if start in seen:
+            continue
+        queue = [start]
+        seen.add(start)
+        while queue:
+            a = queue.pop(0)
+            order.append(a)
+            for nb in template.GetAtomWithIdx(a).GetNeighbors():
+                j = nb.GetIdx()
+                if j not in seen:
+                    seen.add(j)
+                    queue.append(j)
+
+    mapping: dict[int, int] = {}
+    used: set[int] = set()
+
+    def place(pos: int) -> bool:
+        if pos == len(order):
+            return True
+        t = order[pos]
+        t_atom = template.GetAtomWithIdx(t)
+        placed_nbrs = [nb.GetIdx() for nb in t_atom.GetNeighbors() if nb.GetIdx() in mapping]
+        for c in range(len(atoms)):
+            if c in used or elements[c] != t_atom.GetSymbol():
+                continue
+            if all(min_bond <= dist(c, mapping[nb]) <= max_bond for nb in placed_nbrs):
+                mapping[t] = c
+                used.add(c)
+                if place(pos + 1):
+                    return True
+                del mapping[t]
+                used.discard(c)
+        return False
+
+    if not place(0):
+        raise ValueError("no geometric mapping of template atoms onto the coordinates")
+
+    mol = Chem.Mol(template)
+    mol.RemoveAllConformers()
+    conf = Chem.Conformer(n)
+    for t, c in mapping.items():
+        conf.SetAtomPosition(t, Point3D(*coords[c]))
+    mol.AddConformer(conf, assignId=True)
+    return mol
+
+
 def _mol_from_atoms(atoms, template):
     """Build an RDKit molecule from bare coordinates, with bond orders from a template."""
     from rdkit import Chem
     from rdkit.Chem import AllChem
 
-    mol = Chem.MolFromPDBBlock(_pdb_block(atoms), proximityBonding=True, removeHs=False)
-    if mol is None:
-        raise ValueError("RDKit could not build a molecule from the coordinates")
-    return AllChem.AssignBondOrdersFromTemplate(template, mol)
+    try:
+        mol = Chem.MolFromPDBBlock(_pdb_block(atoms), proximityBonding=True, removeHs=False)
+        if mol is None:
+            raise ValueError("RDKit could not build a molecule from the coordinates")
+        return AllChem.AssignBondOrdersFromTemplate(template, mol)
+    except ValueError as first_error:
+        try:
+            return _mol_from_atoms_geometric(atoms, template)
+        except ValueError as second_error:
+            def formula(elements) -> str:
+                return " ".join(f"{el}{n}" for el, n in sorted(Counter(elements).items()))
+
+            raise ValueError(
+                f"could not match ligand atoms to the template "
+                f"(RDKit: {first_error}; geometric fallback: {second_error}). "
+                f"Coordinate atoms: {formula(a[0] for a in atoms)}; "
+                f"template atoms: {formula(a.GetSymbol() for a in template.GetAtoms())}; "
+                f"template SMILES: {Chem.MolToSmiles(template)}"
+            ) from second_error
 
 
 def _pose_models(pdbqt_path: str) -> tuple[list[list[tuple[str, float, float, float]]], list[float]]:
@@ -149,9 +257,7 @@ def run_redock(
 
     crystal_atoms = _crystal_ligand_atoms(pdb_file, resname)
     smiles_for_template = template_smiles or _fetch_ccd_smiles(resname)
-    template = Chem.MolFromSmiles(smiles_for_template)
-    if template is None:
-        raise ValueError(f"RDKit could not parse template SMILES: {smiles_for_template}")
+    template = _template_from_smiles(smiles_for_template)
     if template.GetNumHeavyAtoms() != len(crystal_atoms):
         raise ValueError(
             f"Template has {template.GetNumHeavyAtoms()} heavy atoms but the crystal "

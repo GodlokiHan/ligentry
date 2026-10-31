@@ -1,4 +1,4 @@
-"""Command-line interface: `biosim dock`, `biosim redock`, `biosim plugins`."""
+"""Command-line interface: `biosim dock`, `redock`, `benchmark`, `plugins`."""
 from __future__ import annotations
 
 import argparse
@@ -9,6 +9,7 @@ from pathlib import Path
 import biosim.plugins  # noqa: F401
 from biosim.core.plugin import list_plugins
 from biosim.data.chembl import fetch_actives
+from biosim.workflows.benchmark import run_benchmark
 from biosim.workflows.docking import run_docking
 from biosim.workflows.redock import run_redock
 
@@ -38,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
     dock.add_argument("--exhaustiveness", type=int, default=8)
     dock.add_argument("--out", type=Path, default=Path("runs/dock"))
 
-    redock = sub.add_parser("redock", help="Benchmark: re-dock the crystal ligand, report RMSD")
+    redock = sub.add_parser("redock", help="Re-dock one crystal ligand, report RMSD")
     redock.add_argument("--pdb", required=True, help="PDB ID with a bound ligand, e.g. 1HSG")
     redock.add_argument("--ligand-resname", help="Native ligand residue name (default: largest)")
     redock.add_argument(
@@ -49,6 +50,11 @@ def main(argv: list[str] | None = None) -> int:
     redock.add_argument("--n-poses", type=int, default=9)
     redock.add_argument("--out", type=Path, default=Path("runs/redock"))
 
+    bench = sub.add_parser("benchmark", help="Run the redocking benchmark suite")
+    bench.add_argument("--only", nargs="*", help="Run only these PDB IDs, e.g. --only 3PTB 1STP")
+    bench.add_argument("--exhaustiveness", type=int, default=16)
+    bench.add_argument("--out", type=Path, default=Path("runs/benchmark"))
+
     sub.add_parser("plugins", help="List registered plugins and their availability")
 
     args = parser.parse_args(argv)
@@ -58,6 +64,32 @@ def main(argv: list[str] | None = None) -> int:
         for name, desc, missing in list_plugins():
             status = "OK" if not missing else f"missing: {', '.join(missing)}"
             print(f"{name:15s} {status:25s} {desc}")
+        return 0
+
+    if args.command == "benchmark":
+        summary = run_benchmark(
+            args.out, only=args.only, exhaustiveness=args.exhaustiveness
+        )
+        print(f"\n{'PDB':<5} {'lig':<4} {'top RMSD':>9} {'best RMSD':>10} {'result':<7} target")
+        for r in summary["results"]:
+            if r["status"] != "ok":
+                result, top, best = "ERROR", "-", "-"
+            else:
+                result = "PASS" if r["passed"] else "FAIL"
+                top, best = r["top_pose_rmsd"], r["best_rmsd_any_pose"]
+            print(f"{r['pdb']:<5} {r['ligand']:<4} {top:>9} {best:>10} {result:<7} {r['target']}")
+            if r["status"] != "ok":
+                print(f"      {r['status']}")
+        n = summary["n_total"]
+        print(
+            f"\nTop-pose success (<= {summary['threshold_angstrom']} A): "
+            f"{summary['n_passed_top_pose']}/{n}"
+        )
+        print(f"Success with any of the poses: {summary['n_passed_any_pose']}/{n}")
+        if summary["n_errors"]:
+            print(f"Errors (counted as failures): {summary['n_errors']}")
+        print(f"Median top-pose RMSD: {summary['median_top_pose_rmsd']} A")
+        print(f"Details: {args.out / 'benchmark_results.csv'}")
         return 0
 
     if args.command == "redock":
