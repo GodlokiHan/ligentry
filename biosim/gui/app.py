@@ -8,17 +8,23 @@ from pathlib import Path
 
 from biosim.gui.worker import DockWorker  # imports RDKit before Qt widgets
 import psutil
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QSettings, Qt, QTimer
+from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QFormLayout, QHBoxLayout, QLabel,
-    QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar,
-    QPushButton, QSpinBox, QSplitter, QTableWidget, QTableWidgetItem,
-    QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QFileDialog, QFormLayout, QHBoxLayout,
+    QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
+    QProgressBar, QPushButton, QSpinBox, QSplitter, QStyle, QTableWidget,
+    QTableWidgetItem, QToolBar, QVBoxLayout, QWidget,
 )
 
+from biosim.gui import runio
 from biosim.gui.viewer import MolViewer
 
 _PROGRESS_RE = re.compile(r"\[(\d+)/(\d+)\]")  # "[3/20] name" from the docking log
+
+COL_RANK, COL_NAME, COL_SCORE, COL_ISO, COL_STATUS, COL_NOTES = range(6)
+HEADERS = ["Rank", "Name", "Score (kcal/mol)", "Isomers", "Status", "Notes"]
+MAX_RECENT = 8
 
 
 def fmt_time(seconds: float) -> str:
@@ -31,11 +37,14 @@ def fmt_time(seconds: float) -> str:
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("biosim")
         self.resize(1400, 850)
         self.worker: DockWorker | None = None
         self.workdir = Path("runs/gui")
         self.pdb_id = ""
+        self.rows: list[dict] = []  # table row i <-> self.rows[i]
+        self.dirty = False
+        self.running = False
+        self._populating = False
 
         # run-state used by the timers
         self.t_start: float | None = None
@@ -88,12 +97,17 @@ class MainWindow(QMainWindow):
         self.cpu_bar.setFormat("CPU %p%")
         self.cpu_bar.setAlignment(Qt.AlignCenter)
 
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["Rank", "Name", "Score (kcal/mol)", "Status"])
+        self.table = QTableWidget(0, len(HEADERS))
+        self.table.setHorizontalHeaderLabels(HEADERS)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.table.horizontalHeader().setStretchLastSection(True)
+        # only the Notes cells are editable (the other items drop the edit flag)
+        self.table.setEditTriggers(
+            QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed
+        )
+        header = self.table.horizontalHeader()
+        header.setStretchLastSection(True)
+        header.setSectionResizeMode(COL_NAME, QHeaderView.ResizeToContents)
 
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
@@ -120,8 +134,13 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(1, 3)
         self.setCentralWidget(splitter)
 
+        self._build_actions()
+        self._build_menus_and_toolbar()
+        self.statusBar().showMessage("Ready")
+
         self.run_btn.clicked.connect(self.start)
-        self.table.itemSelectionChanged.connect(self.show_selected)
+        self.table.itemSelectionChanged.connect(self.on_selection_changed)
+        self.table.itemChanged.connect(self.on_item_changed)
 
         psutil.cpu_percent(interval=None)  # prime: the first call always returns 0
         self.timer = QTimer(self)
@@ -129,9 +148,391 @@ class MainWindow(QMainWindow):
         self.timer.timeout.connect(self.tick)
         self.timer.start()
 
-    # ---- run control ----------------------------------------------------
+        self.update_title()
+        self.update_actions()
+
+    # ---- actions, menus, toolbar -----------------------------------------
+
+    def _action(self, text, slot, shortcut=None, icon=None, tip="", checkable=False):
+        action = QAction(text, self)
+        if icon is not None:
+            action.setIcon(self.style().standardIcon(icon))
+        if shortcut:
+            action.setShortcut(QKeySequence(shortcut))
+        if tip:
+            action.setStatusTip(tip)
+            action.setToolTip(f"{text}: {tip}")
+        action.setCheckable(checkable)
+        if checkable:
+            action.toggled.connect(slot)
+        else:
+            action.triggered.connect(lambda _checked=False, s=slot: s())
+        return action
+
+    def _build_actions(self) -> None:
+        S = QStyle.StandardPixmap
+        self.act_new = self._action(
+            "New run", self.new_run, "Ctrl+N", S.SP_FileIcon, "Clear the results and start fresh")
+        self.act_open = self._action(
+            "Open run...", self.open_run, "Ctrl+O", S.SP_DirOpenIcon,
+            "Load a finished run folder without docking again")
+        self.act_save = self._action(
+            "Save", self.save, "Ctrl+S", S.SP_DialogSaveButton,
+            "Write the results (with your notes) back to the run folder")
+        self.act_save_as = self._action(
+            "Save as...", self.save_as, "Ctrl+Shift+S", S.SP_DriveHDIcon,
+            "Copy the whole run folder to a new place and continue there")
+        self.act_export = self._action(
+            "Export CSV...", self.export_csv, "Ctrl+E", S.SP_ArrowDown,
+            "Write the table to a CSV file anywhere")
+        self.act_quit = self._action("Quit", self.close, "Ctrl+Q", S.SP_DialogCloseButton)
+
+        self.act_copy_smiles = self._action(
+            "Copy SMILES", self.copy_smiles, "Ctrl+Shift+C", S.SP_FileLinkIcon,
+            "Copy the selected ligand's SMILES (best isomer) to the clipboard")
+        self.act_edit_note = self._action(
+            "Edit note", self.edit_note, "F2", S.SP_FileDialogDetailedView,
+            "Edit the note of the selected ligand")
+        self.act_remove = self._action(
+            "Remove ligand", self.remove_selected, "Ctrl+Backspace", S.SP_TrashIcon,
+            "Remove the selected ligand from the results table (files stay on disk)")
+
+        self.act_run = self._action(
+            "Run docking", self.start, "Ctrl+R", S.SP_MediaPlay, "Start docking with the form settings")
+
+        self.act_show_log = self._action(
+            "Show log", self.toggle_log, None, None, "Show or hide the log box", checkable=True)
+        self.act_show_log.setChecked(True)
+        self.act_reset_view = self._action(
+            "Reset 3D view", self.show_selected, None, S.SP_BrowserReload,
+            "Re-centre the 3D view on the selected ligand")
+        self.act_about = self._action("About biosim", self.about)
+
+    def _build_menus_and_toolbar(self) -> None:
+        menubar = self.menuBar()
+
+        file_menu = menubar.addMenu("&File")
+        file_menu.addAction(self.act_new)
+        file_menu.addAction(self.act_open)
+        self.recent_menu = file_menu.addMenu("Open &recent")
+        self.recent_menu.aboutToShow.connect(self._rebuild_recent_menu)
+        file_menu.addSeparator()
+        file_menu.addAction(self.act_save)
+        file_menu.addAction(self.act_save_as)
+        file_menu.addAction(self.act_export)
+        file_menu.addSeparator()
+        file_menu.addAction(self.act_quit)
+
+        edit_menu = menubar.addMenu("&Edit")
+        edit_menu.addAction(self.act_edit_note)
+        edit_menu.addAction(self.act_copy_smiles)
+        edit_menu.addSeparator()
+        edit_menu.addAction(self.act_remove)
+
+        run_menu = menubar.addMenu("&Run")
+        run_menu.addAction(self.act_run)
+
+        view_menu = menubar.addMenu("&View")
+        view_menu.addAction(self.act_show_log)
+        view_menu.addAction(self.act_reset_view)
+
+        help_menu = menubar.addMenu("&Help")
+        help_menu.addAction(self.act_about)
+
+        bar = QToolBar("Main toolbar", self)
+        bar.setMovable(False)
+        bar.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        for action in (self.act_new, self.act_open, self.act_save, self.act_save_as):
+            bar.addAction(action)
+        bar.addSeparator()
+        bar.addAction(self.act_run)
+        bar.addSeparator()
+        for action in (self.act_edit_note, self.act_copy_smiles, self.act_remove, self.act_export):
+            bar.addAction(action)
+        bar.addSeparator()
+        bar.addAction(self.act_reset_view)
+        self.addToolBar(bar)
+
+    def update_actions(self) -> None:
+        has_rows = bool(self.rows)
+        selected = 0 <= self.table.currentRow() < len(self.rows)
+        idle = not self.running
+        self.act_new.setEnabled(idle)
+        self.act_open.setEnabled(idle)
+        self.recent_menu.setEnabled(idle)
+        self.act_run.setEnabled(idle)
+        self.run_btn.setEnabled(idle)
+        self.act_save.setEnabled(idle and has_rows)
+        self.act_save_as.setEnabled(idle and has_rows)
+        self.act_export.setEnabled(has_rows)
+        self.act_copy_smiles.setEnabled(selected)
+        self.act_edit_note.setEnabled(selected and idle)
+        self.act_remove.setEnabled(selected and idle)
+        self.act_reset_view.setEnabled(selected)
+
+    def update_title(self) -> None:
+        if self.rows:
+            self.setWindowTitle(f"biosim - {self.workdir}{' *' if self.dirty else ''}")
+        else:
+            self.setWindowTitle("biosim")
+
+    def set_dirty(self, flag: bool) -> None:
+        self.dirty = flag
+        self.update_title()
+
+    # ---- recent folders ---------------------------------------------------
+
+    @staticmethod
+    def _settings() -> QSettings:
+        return QSettings("biosim", "biosim")
+
+    def _recent(self) -> list[str]:
+        value = self._settings().value("recent_runs", [])
+        if isinstance(value, str):
+            value = [value]
+        return [v for v in (value or []) if isinstance(v, str)]
+
+    def _add_recent(self, folder: Path) -> None:
+        folder_s = str(Path(folder).resolve())
+        items = [folder_s] + [r for r in self._recent() if r != folder_s]
+        self._settings().setValue("recent_runs", items[:MAX_RECENT])
+
+    def _rebuild_recent_menu(self) -> None:
+        self.recent_menu.clear()
+        items = [r for r in self._recent() if Path(r).is_dir()]
+        if not items:
+            self.recent_menu.addAction("(none)").setEnabled(False)
+            return
+        for item in items:
+            action = self.recent_menu.addAction(item)
+            action.triggered.connect(lambda _c=False, p=item: self.open_run(Path(p)))
+
+    # ---- table <-> rows ---------------------------------------------------
+
+    def refresh_table(self, select: int | None = None) -> None:
+        self._populating = True
+        try:
+            self.table.setRowCount(len(self.rows))
+            read_only = Qt.ItemIsSelectable | Qt.ItemIsEnabled
+            for i, row in enumerate(self.rows):
+                score = row.get("vina_score_kcal_mol")
+                values = {
+                    COL_RANK: str(i + 1),
+                    COL_NAME: row.get("name", ""),
+                    COL_SCORE: f"{score:.2f}" if score is not None else "n/a",
+                    COL_ISO: str(row.get("n_isomers", 1)),
+                    COL_STATUS: row.get("status", ""),
+                    COL_NOTES: row.get("notes", ""),
+                }
+                for col, text in values.items():
+                    item = QTableWidgetItem(text)
+                    if col != COL_NOTES:
+                        item.setFlags(read_only)
+                    self.table.setItem(i, col, item)
+        finally:
+            self._populating = False
+        if select is not None and 0 <= select < len(self.rows):
+            self.table.selectRow(select)
+        self.update_actions()
+        self.update_title()
+
+    def on_item_changed(self, item: QTableWidgetItem) -> None:
+        if self._populating or item.column() != COL_NOTES:
+            return
+        if 0 <= item.row() < len(self.rows):
+            self.rows[item.row()]["notes"] = item.text()
+            self.set_dirty(True)
+
+    def on_selection_changed(self) -> None:
+        self.update_actions()
+        self.show_selected()
+
+    def _selected_index(self) -> int | None:
+        row = self.table.currentRow()
+        return row if 0 <= row < len(self.rows) else None
+
+    # ---- file actions -----------------------------------------------------
+
+    def maybe_save(self) -> bool:
+        """True if it is fine to discard/replace the current results."""
+        if not self.dirty:
+            return True
+        answer = QMessageBox.question(
+            self, "biosim", "You have unsaved changes to the results. Save them first?",
+            QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel, QMessageBox.Save,
+        )
+        if answer == QMessageBox.Save:
+            return self.save()
+        return answer == QMessageBox.Discard
+
+    def new_run(self) -> None:
+        if self.running or not self.maybe_save():
+            return
+        self.rows = []
+        self.refresh_table()
+        self.viewer.clear()
+        self.log.clear()
+        self.workdir = Path(self.out_edit.text().strip() or "runs/gui")
+        self.set_dirty(False)
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        self.elapsed_label.setText("Elapsed 00:00")
+        self.remaining_label.setText("Remaining -")
+        self.statusBar().showMessage("New run: fill in the form and press Run docking")
+
+    def open_run(self, folder: Path | None = None) -> None:
+        if self.running or not self.maybe_save():
+            return
+        if folder is None:
+            start = self.workdir.parent if self.workdir.parent.is_dir() else Path.cwd()
+            chosen = QFileDialog.getExistingDirectory(self, "Open run folder", str(start))
+            if not chosen:
+                return
+            folder = Path(chosen)
+        try:
+            pdb_id, rows = runio.load_run(folder)
+        except (runio.RunFolderError, OSError) as exc:
+            QMessageBox.warning(self, "biosim", str(exc))
+            return
+
+        self.workdir = Path(folder)
+        self.pdb_id = pdb_id
+        self.rows = rows
+        if pdb_id:
+            self.pdb_edit.setText(pdb_id)
+        self.out_edit.setText(str(folder))
+        self.log.clear()
+        self.log.appendPlainText(f"Loaded {len(rows)} ligands from {folder / 'results.csv'}")
+        if not pdb_id:
+            self.log.appendPlainText("No *_protein.pdb in this folder: the 3D viewer is unavailable.")
+        self.viewer.clear()
+        self.progress.setRange(0, max(len(rows), 1))
+        self.progress.setValue(len(rows))
+        self.elapsed_label.setText("Opened from disk")
+        self.remaining_label.setText("Done")
+        self.set_dirty(False)
+        self.refresh_table(select=0 if rows else None)
+        self._add_recent(folder)
+        self.statusBar().showMessage(f"Opened {folder}")
+
+    def save(self) -> bool:
+        if not self.rows:
+            return True
+        try:
+            path = runio.save_results(self.workdir, self.rows)
+        except (runio.RunFolderError, OSError) as exc:
+            QMessageBox.critical(self, "biosim", f"Could not save: {exc}")
+            return False
+        self.set_dirty(False)
+        self.statusBar().showMessage(f"Saved {path}")
+        return True
+
+    def save_as(self) -> bool:
+        if not self.rows:
+            return False
+        suggestion = self.workdir.parent / f"{self.workdir.name}_copy"
+        chosen, _ = QFileDialog.getSaveFileName(
+            self, "Save run as (creates a new folder)", str(suggestion)
+        )
+        if not chosen:
+            return False
+        dest = Path(chosen)
+        try:
+            runio.copy_run(self.workdir, dest)
+            runio.save_results(dest, self.rows)
+        except (runio.RunFolderError, OSError) as exc:
+            QMessageBox.critical(self, "biosim", f"Could not save as: {exc}")
+            return False
+        self.workdir = dest
+        self.out_edit.setText(str(dest))
+        self.set_dirty(False)
+        self._add_recent(dest)
+        self.statusBar().showMessage(f"Saved run to {dest}")
+        return True
+
+    def export_csv(self) -> None:
+        if not self.rows:
+            return
+        chosen, _ = QFileDialog.getSaveFileName(
+            self, "Export results as CSV", str(self.workdir / "results_export.csv"),
+            "CSV files (*.csv)",
+        )
+        if not chosen:
+            return
+        try:
+            path = runio.export_csv(Path(chosen), self.rows)
+        except OSError as exc:
+            QMessageBox.critical(self, "biosim", f"Could not export: {exc}")
+            return
+        self.statusBar().showMessage(f"Exported {path}")
+
+    # ---- edit actions -----------------------------------------------------
+
+    def copy_smiles(self) -> None:
+        idx = self._selected_index()
+        if idx is None:
+            return
+        row = self.rows[idx]
+        smiles = row.get("best_isomer_smiles") or row.get("smiles") or ""
+        QApplication.clipboard().setText(smiles)
+        self.statusBar().showMessage(f"Copied SMILES of {row.get('name', '')}")
+
+    def edit_note(self) -> None:
+        idx = self._selected_index()
+        if idx is None:
+            return
+        item = self.table.item(idx, COL_NOTES)
+        if item is not None:
+            self.table.setCurrentItem(item)
+            self.table.editItem(item)
+
+    def remove_selected(self) -> None:
+        idx = self._selected_index()
+        if idx is None:
+            return
+        name = self.rows[idx].get("name", "")
+        answer = QMessageBox.question(
+            self, "biosim",
+            f"Remove '{name}' from the results table?\n"
+            "Its pose file stays on disk; Save rewrites results.csv without it.",
+        )
+        if answer != QMessageBox.Yes:
+            return
+        del self.rows[idx]
+        self.set_dirty(True)
+        self.refresh_table(select=min(idx, len(self.rows) - 1))
+        if not self.rows:
+            self.viewer.clear()
+
+    # ---- view / help ------------------------------------------------------
+
+    def toggle_log(self, visible: bool) -> None:
+        self.log.setVisible(visible)
+
+    def about(self) -> None:
+        QMessageBox.about(
+            self, "About biosim",
+            "biosim: an open-source platform for docking, drug effectiveness and "
+            "protein folding simulations.\n\nDocking engine: AutoDock Vina. "
+            "Chemistry: RDKit, Meeko, Open Babel.",
+        )
+
+    def closeEvent(self, event) -> None:
+        if self.running:
+            QMessageBox.information(
+                self, "biosim", "Docking is still running. Wait for it to finish before closing.")
+            event.ignore()
+            return
+        if not self.maybe_save():
+            event.ignore()
+            return
+        event.accept()
+
+    # ---- run control ------------------------------------------------------
 
     def start(self) -> None:
+        if self.running:
+            return
         pdb_id = self.pdb_edit.text().strip().upper()
         chembl = self.chembl_edit.text().strip()
         smiles_text = self.smiles_edit.toPlainText()
@@ -141,12 +542,17 @@ class MainWindow(QMainWindow):
         if not chembl and not smiles_text.strip():
             QMessageBox.warning(self, "biosim", "Enter a ChEMBL target or paste SMILES.")
             return
+        if not self.maybe_save():
+            return
 
         self.pdb_id = pdb_id
         self.workdir = Path(self.out_edit.text().strip() or "runs/gui")
-        self.table.setRowCount(0)
+        self.rows = []
+        self.refresh_table()
+        self.set_dirty(False)
         self.log.clear()
-        self.run_btn.setEnabled(False)
+        self.running = True
+        self.update_actions()
 
         self.t_start = time.time()
         self.t_first_ligand = None
@@ -188,7 +594,7 @@ class MainWindow(QMainWindow):
     def on_finished(self) -> None:
         elapsed = time.time() - self.t_start if self.t_start else 0.0
         self.t_start = None
-        self.run_btn.setEnabled(True)
+        self.running = False
         if self.failed:
             self.progress.setRange(0, 1)
             self.progress.setValue(0)
@@ -199,22 +605,16 @@ class MainWindow(QMainWindow):
             self.progress.setValue(max(self.total, 1))
             self.elapsed_label.setText(f"Total {fmt_time(elapsed)}")
             self.remaining_label.setText("Done")
+        self.update_actions()
 
     def on_done(self, rows: list) -> None:
-        self.table.setRowCount(len(rows))
-        for i, row in enumerate(rows):
-            score = row["vina_score_kcal_mol"]
-            values = [
-                str(i + 1), row["name"],
-                f"{score:.2f}" if score is not None else "n/a", row["status"],
-            ]
-            for col, text in enumerate(values):
-                self.table.setItem(i, col, QTableWidgetItem(text))
+        self.rows = [dict(row, notes="") for row in rows]  # run_docking already wrote results.csv
+        self.set_dirty(False)
+        self.refresh_table(select=0 if self.rows else None)
+        self._add_recent(self.workdir)
         self.log.appendPlainText(f"Done. Results: {self.workdir / 'results.csv'}")
-        if rows:
-            self.table.selectRow(0)
 
-    # ---- timers ---------------------------------------------------------
+    # ---- timers -----------------------------------------------------------
 
     def tick(self) -> None:
         self.cpu_bar.setValue(int(psutil.cpu_percent(interval=None)))
@@ -231,13 +631,13 @@ class MainWindow(QMainWindow):
             remaining = per_ligand * (self.total - self.completed)
             self.remaining_label.setText(f"Remaining ~{fmt_time(remaining)}")
 
-    # ---- viewer ---------------------------------------------------------
+    # ---- viewer -----------------------------------------------------------
 
     def show_selected(self) -> None:
-        row = self.table.currentRow()
-        if row < 0 or self.table.item(row, 1) is None:
+        idx = self._selected_index()
+        if idx is None:
             return
-        name = self.table.item(row, 1).text()
+        name = self.rows[idx].get("name", "")
         safe = re.sub(r"[^A-Za-z0-9_.-]", "_", name)
         pose = self.workdir / "poses" / f"{safe}.pdbqt"
         receptor = self.workdir / f"{self.pdb_id}_protein.pdb"
