@@ -1,100 +1,124 @@
 {
   "threshold_angstrom": 2.0,
   "exhaustiveness": 16,
+  "seeds": [
+    42,
+    7,
+    123,
+    2024,
+    99
+  ],
   "n_total": 8,
   "n_completed": 8,
   "n_errors": 0,
-  "n_passed_top_pose": 6,
+  "n_passed_top_pose": 5,
   "n_passed_any_pose": 7,
-  "median_top_pose_rmsd": 0.769,
+  "seed_pass_rate": 0.675,
+  "median_top_pose_rmsd": 1.586,
   "results": [
     {
       "pdb": "1HSG",
       "ligand": "MK1",
       "target": "HIV-1 protease / indinavir",
       "status": "ok",
-      "top_pose_rmsd": 0.639,
-      "best_rmsd_any_pose": 0.639,
-      "top_vina_score": -11.347,
-      "passed": true,
-      "seconds": 53.8
+      "seeds": 5,
+      "seed_passes": 2,
+      "top_pose_rmsd": 4.357,
+      "best_rmsd_any_pose": 0.819,
+      "top_vina_score": -10.364,
+      "passed": false,
+      "seconds": 283.1
     },
     {
       "pdb": "3PTB",
       "ligand": "BEN",
       "target": "Trypsin / benzamidine",
       "status": "ok",
-      "top_pose_rmsd": 0.386,
-      "best_rmsd_any_pose": 0.357,
-      "top_vina_score": -6.086,
+      "seeds": 5,
+      "seed_passes": 5,
+      "top_pose_rmsd": 0.39,
+      "best_rmsd_any_pose": 0.327,
+      "top_vina_score": -6.071,
       "passed": true,
-      "seconds": 2.4
+      "seconds": 15.2
     },
     {
       "pdb": "1STP",
       "ligand": "BTN",
       "target": "Streptavidin / biotin",
       "status": "ok",
-      "top_pose_rmsd": 0.691,
-      "best_rmsd_any_pose": 0.691,
-      "top_vina_score": -7.405,
+      "seeds": 5,
+      "seed_passes": 5,
+      "top_pose_rmsd": 0.94,
+      "best_rmsd_any_pose": 0.744,
+      "top_vina_score": -6.828,
       "passed": true,
-      "seconds": 5.4
+      "seconds": 27.6
     },
     {
       "pdb": "1M17",
       "ligand": "AQ4",
       "target": "EGFR kinase / erlotinib",
       "status": "ok",
-      "top_pose_rmsd": 5.853,
-      "best_rmsd_any_pose": 1.417,
-      "top_vina_score": -7.269,
-      "passed": false,
-      "seconds": 13.2
+      "seeds": 5,
+      "seed_passes": 5,
+      "top_pose_rmsd": 1.795,
+      "best_rmsd_any_pose": 1.359,
+      "top_vina_score": -7.394,
+      "passed": true,
+      "seconds": 68.6
     },
     {
       "pdb": "3ERT",
       "ligand": "OHT",
       "target": "Estrogen receptor alpha / 4-hydroxytamoxifen",
       "status": "ok",
-      "top_pose_rmsd": 1.432,
-      "best_rmsd_any_pose": 1.205,
-      "top_vina_score": -9.633,
+      "seeds": 5,
+      "seed_passes": 5,
+      "top_pose_rmsd": 1.377,
+      "best_rmsd_any_pose": 1.23,
+      "top_vina_score": -9.651,
       "passed": true,
-      "seconds": 13.0
+      "seconds": 69.5
     },
     {
       "pdb": "4DFR",
       "ligand": "MTX",
       "target": "DHFR / methotrexate",
       "status": "ok",
-      "top_pose_rmsd": 5.858,
-      "best_rmsd_any_pose": 5.246,
-      "top_vina_score": -8.912,
+      "seeds": 5,
+      "seed_passes": 0,
+      "top_pose_rmsd": 5.761,
+      "best_rmsd_any_pose": 4.942,
+      "top_vina_score": -8.797,
       "passed": false,
-      "seconds": 25.7
+      "seconds": 128.6
     },
     {
       "pdb": "1KV1",
       "ligand": "BMU",
       "target": "p38 MAP kinase / pyrazole urea (BMU)",
       "status": "ok",
-      "top_pose_rmsd": 0.623,
-      "best_rmsd_any_pose": 0.623,
-      "top_vina_score": -9.433,
+      "seeds": 5,
+      "seed_passes": 5,
+      "top_pose_rmsd": 0.642,
+      "best_rmsd_any_pose": 0.532,
+      "top_vina_score": -9.412,
       "passed": true,
-      "seconds": 6.5
+      "seconds": 30.2
     },
     {
       "pdb": "1EVE",
       "ligand": "E20",
       "target": "Acetylcholinesterase / donepezil",
       "status": "ok",
-      "top_pose_rmsd": 0.848,
-      "best_rmsd_any_pose": 0.848,
-      "top_vina_score": -11.067,
-      "passed": true,
-      "seconds": 7.9
+      "seeds": 5,
+      "seed_passes": 0,
+      "top_pose_rmsd": 3.474,
+      "best_rmsd_any_pose": 0.867,
+      "top_vina_score": -10.906,
+      "passed": false,
+      "seconds": 44.5
     }
   ]
 }

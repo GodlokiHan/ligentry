@@ -48,11 +48,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     redock.add_argument("--exhaustiveness", type=int, default=16)
     redock.add_argument("--n-poses", type=int, default=9)
+    redock.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
     redock.add_argument("--out", type=Path, default=Path("runs/redock"))
 
     bench = sub.add_parser("benchmark", help="Run the redocking benchmark suite")
     bench.add_argument("--only", nargs="*", help="Run only these PDB IDs, e.g. --only 3PTB 1STP")
     bench.add_argument("--exhaustiveness", type=int, default=16)
+    bench.add_argument(
+        "--seeds", nargs="+", type=int, default=[42],
+        help="Seeds to run per complex, e.g. --seeds 42 7 123 2024 99",
+    )
     bench.add_argument("--out", type=Path, default=Path("runs/benchmark"))
 
     sub.add_parser("plugins", help="List registered plugins and their availability")
@@ -68,24 +73,35 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "benchmark":
         summary = run_benchmark(
-            args.out, only=args.only, exhaustiveness=args.exhaustiveness
+            args.out,
+            only=args.only,
+            exhaustiveness=args.exhaustiveness,
+            seeds=args.seeds,
         )
-        print(f"\n{'PDB':<5} {'lig':<4} {'top RMSD':>9} {'best RMSD':>10} {'result':<7} target")
+        print(
+            f"\n{'PDB':<5} {'lig':<4} {'top RMSD':>9} {'best RMSD':>10} "
+            f"{'seeds':>6} {'result':<7} target"
+        )
         for r in summary["results"]:
             if r["status"] != "ok":
-                result, top, best = "ERROR", "-", "-"
+                result, top, best, passes = "ERROR", "-", "-", "-"
             else:
                 result = "PASS" if r["passed"] else "FAIL"
                 top, best = r["top_pose_rmsd"], r["best_rmsd_any_pose"]
-            print(f"{r['pdb']:<5} {r['ligand']:<4} {top:>9} {best:>10} {result:<7} {r['target']}")
+                passes = f"{r['seed_passes']}/{r['seeds']}"
+            print(
+                f"{r['pdb']:<5} {r['ligand']:<4} {top:>9} {best:>10} "
+                f"{passes:>6} {result:<7} {r['target']}"
+            )
             if r["status"] != "ok":
                 print(f"      {r['status']}")
         n = summary["n_total"]
         print(
-            f"\nTop-pose success (<= {summary['threshold_angstrom']} A): "
-            f"{summary['n_passed_top_pose']}/{n}"
+            f"\nTop-pose success (<= {summary['threshold_angstrom']} A, majority of "
+            f"{len(summary['seeds'])} seed(s)): {summary['n_passed_top_pose']}/{n}"
         )
-        print(f"Success with any of the poses: {summary['n_passed_any_pose']}/{n}")
+        print(f"Per-seed top-pose pass rate: {summary['seed_pass_rate']}")
+        print(f"Success with any pose in any seed: {summary['n_passed_any_pose']}/{n}")
         if summary["n_errors"]:
             print(f"Errors (counted as failures): {summary['n_errors']}")
         print(f"Median top-pose RMSD: {summary['median_top_pose_rmsd']} A")
@@ -100,8 +116,9 @@ def main(argv: list[str] | None = None) -> int:
             template_smiles=args.template_smiles,
             exhaustiveness=args.exhaustiveness,
             n_poses=args.n_poses,
+            seed=args.seed,
         )
-        print(f"\nRedocking {result['ligand']} into {result['pdb']}")
+        print(f"\nRedocking {result['ligand']} into {result['pdb']} (seed {result['seed']})")
         print(f"{'pose':>4}  {'vina':>8}  {'RMSD (A)':>9}")
         for p in result["poses"]:
             score = p["vina_score"] if p["vina_score"] is not None else "n/a"

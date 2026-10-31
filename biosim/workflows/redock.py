@@ -242,6 +242,7 @@ def run_redock(
     template_smiles: str | None = None,
     exhaustiveness: int = 16,
     n_poses: int = 9,
+    seed: int = 42,
 ) -> dict:
     from rdkit import Chem
     from rdkit.Chem import rdMolAlign
@@ -271,13 +272,15 @@ def run_redock(
     log.info("Ligand SMILES (stereo from crystal): %s", dock_smiles)
 
     receptor = get_plugin("receptor_prep").run({"receptor_pdb": str(pocket.receptor_pdb)}, workdir)
-    prepared = get_plugin("ligand_prep").run({"smiles": dock_smiles}, workdir)
+    prepared = get_plugin("ligand_prep").run({"smiles": dock_smiles, "seed": seed}, workdir)
 
     poses_dir = workdir / "poses"
     poses_dir.mkdir(exist_ok=True)
     poses_path = poses_dir / f"{resname}_redock.pdbqt"
 
-    log.info("Docking (exhaustiveness=%d, n_poses=%d) ...", exhaustiveness, n_poses)
+    log.info(
+        "Docking (exhaustiveness=%d, n_poses=%d, seed=%d) ...", exhaustiveness, n_poses, seed
+    )
     get_plugin("vina").run(
         {
             "receptor_pdbqt": receptor["receptor_pdbqt"],
@@ -286,6 +289,7 @@ def run_redock(
             "size": pocket.size,
             "exhaustiveness": exhaustiveness,
             "n_poses": n_poses,
+            "seed": seed,
             "out_pdbqt": str(poses_path),
         },
         workdir,
@@ -311,6 +315,7 @@ def run_redock(
         "pdb": pdb_id.upper(),
         "ligand": resname,
         "ligand_smiles": dock_smiles,
+        "seed": seed,
         "top_pose_rmsd": poses[0]["rmsd"],
         "best_rmsd_any_pose": min(p["rmsd"] for p in poses),
         "success_top_pose": poses[0]["rmsd"] <= SUCCESS_RMSD,

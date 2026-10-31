@@ -15,7 +15,7 @@ class VinaDocking(Plugin):
     def run(self, inputs: dict[str, Any], workdir: Path) -> dict[str, Any]:
         from vina import Vina
 
-        v = Vina(sf_name="vina", seed=42, verbosity=0)
+        v = Vina(sf_name="vina", seed=int(inputs.get("seed", 42)), verbosity=0)
         v.set_receptor(inputs["receptor_pdbqt"])
         v.set_ligand_from_string(inputs["ligand_pdbqt"])
         v.compute_vina_maps(center=list(inputs["center"]), box_size=list(inputs["size"]))

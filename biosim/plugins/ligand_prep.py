@@ -28,8 +28,13 @@ class LigandPrep(Plugin):
         mol = rdMolStandardize.LargestFragmentChooser().choose(mol)  # strip salts
         mol = Chem.AddHs(mol)
 
+        seeds = EMBED_SEEDS
+        if "seed" in inputs:
+            first = int(inputs["seed"])
+            seeds = (first,) + tuple(s for s in EMBED_SEEDS if s != first)
+
         embedded = False
-        for seed in EMBED_SEEDS:
+        for seed in seeds:
             params = AllChem.ETKDGv3()
             params.randomSeed = seed
             params.useRandomCoords = True  # far more robust for large/flexible molecules
@@ -37,7 +42,7 @@ class LigandPrep(Plugin):
                 embedded = True
                 break
         if not embedded:
-            raise ValueError(f"3D embedding failed after {len(EMBED_SEEDS)} attempts")
+            raise ValueError(f"3D embedding failed after {len(seeds)} attempts")
 
         try:
             AllChem.MMFFOptimizeMolecule(mol, maxIters=1000)

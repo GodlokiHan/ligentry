@@ -3,9 +3,9 @@ channels:
   - conda-forge
 dependencies:
   - python=3.11
-  - rdkit
+  - rdkit=2025.09.6
   - openbabel
   - vina
-  - meeko
+  - meeko=0.8.0
   - requests
   - pip
