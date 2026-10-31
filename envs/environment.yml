@@ -9,3 +9,8 @@ dependencies:
   - meeko=0.8.0
   - requests
   - pip
+  - pip:
+      - PySide6==6.12.0
+      - vtk==9.7.1
+      - pyvista==0.49.2
+      - pyvistaqt==0.13.1
