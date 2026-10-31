@@ -1,4 +1,4 @@
-"""3D viewer: protein CA trace plus docked ligand pose, embedded in Qt via PyVista."""
+"""3D viewer: protein CA trace, pocket residues and the docked pose, embedded in Qt."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -21,6 +21,7 @@ _ELEMENT_COLORS = {
 }
 _DEFAULT_COLOR = (200, 120, 200)
 _BOND_MAX = 1.9  # Angstrom, heavy-atom bond cutoff
+_POCKET_CUTOFF = 5.0  # Angstrom around the ligand
 
 
 def read_ca_traces(pdb_path: str | Path) -> dict[str, list[tuple[float, float, float]]]:
@@ -53,6 +54,36 @@ def read_first_pose(pdbqt_path: str | Path) -> list[tuple[str, tuple[float, floa
     return atoms
 
 
+def read_pocket_atoms(pdb_path: str | Path, ligand_pts: np.ndarray, cutoff: float) -> np.ndarray:
+    """Heavy atoms of every residue with any atom within `cutoff` A of the ligand."""
+    residues: dict[tuple[str, str, str], list[tuple[float, float, float]]] = {}
+    for line in Path(pdb_path).read_text().splitlines():
+        if not line.startswith("ATOM") or line[16] not in (" ", "A"):
+            continue
+        if (line[76:78].strip() if len(line) >= 78 else "") == "H":
+            continue
+        key = (line[21], line[22:26].strip(), line[26].strip())
+        residues.setdefault(key, []).append(
+            (float(line[30:38]), float(line[38:46]), float(line[46:54]))
+        )
+    selected: list[np.ndarray] = []
+    for coords in residues.values():
+        arr = np.array(coords)
+        dists = np.linalg.norm(arr[:, None, :] - ligand_pts[None, :, :], axis=2)
+        if dists.min() <= cutoff:
+            selected.append(arr)
+    return np.vstack(selected) if selected else np.empty((0, 3))
+
+
+def _bond_cells(pts: np.ndarray) -> list[int]:
+    cells: list[int] = []
+    for i in range(len(pts)):
+        d = np.linalg.norm(pts[i + 1:] - pts[i], axis=1)
+        for k in np.nonzero((d > 0.4) & (d < _BOND_MAX))[0]:
+            cells.extend([2, i, i + 1 + int(k)])
+    return cells
+
+
 class MolViewer(QtInteractor):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -65,39 +96,51 @@ class MolViewer(QtInteractor):
             if len(pts) < 2:
                 continue
             trace = pv.lines_from_points(np.array(pts))
-            self.add_mesh(trace.tube(radius=0.4), color="lightsteelblue", smooth_shading=True)
+            self.add_mesh(
+                trace.tube(radius=0.3), color="lightsteelblue", opacity=0.45,
+                smooth_shading=True,
+            )
 
         centroid = None
         if pose_pdbqt:
             atoms = read_first_pose(pose_pdbqt)
             if atoms:
-                centroid = self._add_ligand(atoms)
+                ligand_pts = np.array([a[1] for a in atoms], dtype=float)
+                self._add_pocket(receptor_pdb, ligand_pts)
+                centroid = self._add_ligand(atoms, ligand_pts)
 
         self.reset_camera()
         if centroid is not None:
             self.set_focus(centroid.tolist())
+            self.camera.zoom(3.0)
+            self.camera.reset_clipping_range()
         self.render()
 
-    def _add_ligand(self, atoms) -> np.ndarray:
-        pts = np.array([a[1] for a in atoms], dtype=float)
+    def _add_pocket(self, receptor_pdb, ligand_pts: np.ndarray) -> None:
+        pts = read_pocket_atoms(receptor_pdb, ligand_pts, _POCKET_CUTOFF)
+        if len(pts) < 2:
+            return
+        cells = _bond_cells(pts)
+        if not cells:
+            return
+        sticks = pv.PolyData(pts)
+        sticks.lines = np.array(cells)
+        self.add_mesh(sticks.tube(radius=0.07), color="dimgray")
+
+    def _add_ligand(self, atoms, pts: np.ndarray) -> np.ndarray:
         colors = np.array(
             [_ELEMENT_COLORS.get(el, _DEFAULT_COLOR) for el, _ in atoms], dtype=np.uint8
         )
-
-        cells: list[int] = []
-        for i in range(len(pts)):
-            d = np.linalg.norm(pts[i + 1:] - pts[i], axis=1)
-            for k in np.nonzero((d > 0.4) & (d < _BOND_MAX))[0]:
-                cells.extend([2, i, i + 1 + int(k)])
+        cells = _bond_cells(pts)
         if cells:
             bonds = pv.PolyData(pts)
             bonds.lines = np.array(cells)
-            self.add_mesh(bonds.tube(radius=0.12), color="gray")
+            self.add_mesh(bonds.tube(radius=0.15), color="gray")
 
         cloud = pv.PolyData(pts)
         cloud["rgb"] = colors
         self.add_mesh(
             cloud, scalars="rgb", rgb=True, render_points_as_spheres=True,
-            point_size=14, show_scalar_bar=False,
+            point_size=16, show_scalar_bar=False,
         )
         return pts.mean(axis=0)

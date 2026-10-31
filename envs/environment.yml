@@ -14,3 +14,4 @@ dependencies:
       - vtk==9.7.1
       - pyvista==0.49.2
       - pyvistaqt==0.13.1
+      - psutil
