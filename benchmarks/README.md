@@ -53,18 +53,81 @@ not single runs.
 Vina finds near-native poses (best 0.82 A and 0.87 A) but often does not rank
 them first. Treated as a known scoring limitation.
 
-### 4DFR (DHFR / methotrexate): ligand preparation
+### 4DFR (DHFR / methotrexate): scoring limitation
 
-Fails in every seed. Raising exhaustiveness from 16 to 64 did not help (top
-pose 5.858 A, best of 9 poses 5.246 A), so sampling is not the limiting factor.
-The pipeline neutralizes ligands, while crystallographic methotrexate binds
-with an ionized glutamate and (likely) a protonated pteridine ring that form
-salt bridges in the pocket. This is the suspected cause and has not been
-confirmed. Planned fix: protonation-aware ligand preparation.
+4DFR fails in every seed (0/5, median top-pose RMSD 5.76 A, best pose of any
+rank 4.94 A). We investigated it and attribute the failure to Vina's scoring,
+not to a bug in ligand preparation or in the search. It stays in the suite as a
+documented hard case, and the pipeline is deliberately not tuned to pass it.
+
+**Diagnostics.** Same redocking, five seeds (42, 7, 123, 2024, 99),
+exhaustiveness 16 unless noted. Reproduce with `python scripts/diag_4dfr.py`.
+
+| Variant | Ligand state                      | Seeds passed | Median top RMSD (A) | Best any pose (A) |
+|---------|-----------------------------------|--------------|---------------------|-------------------|
+| A       | neutral (baseline)                | 0/5          | 5.761               | 4.942             |
+| B       | carboxylates deprotonated         | 0/5          | 5.952               | 2.690             |
+| C       | B + pteridine N1-H+ (bound state) | 0/5          | 8.634               | 5.719             |
+| D       | neutral, exhaustiveness 32        | 0/5          | 5.838               | 4.942             |
+
+- Search depth is not the cause. Raising exhaustiveness to 32 (D) finds the
+  same best pose as the baseline in two seeds and the same wrong top pose
+  repeatedly. An earlier single-seed test at exhaustiveness 64 gave the same
+  picture (top pose 5.858 A, best of 9 poses 5.246 A).
+- Ligand protonation helps sampling but not ranking. Charging the carboxylates
+  (B) brings the closest pose to 2.7-2.85 A in four of five seeds, but the
+  top-ranked pose is still about 6 A away. Protonating N1 (C) makes it worse.
+- Receptor preparation looks sound. Asp27 is anionic in the receptor PDBQT (no
+  hydrogen on either carboxylate oxygen). The 4DFR file contains no cofactor.
+  Only `ATOM` records are kept, so the 428 crystallographic waters and the ions
+  are not part of the docking receptor.
+
+**Where the error is.** `python scripts/analyze_4dfr_poses.py` splits the RMSD
+by fragment. In most baseline top poses the pteridine head is about 8 A from
+the crystal position (median 7.96 A) while the benzoyl linker and glutamate
+tail are about 3.7 A off. In variant B's closest poses the benzoyl is 0.4-0.9 A
+and the glutamate about 2.3-2.6 A from the crystal, but the pteridine is still
+about 4 A away. The failure is mainly the deep pteridine pocket, not only a
+floppy tail.
+
+**Scoring, not sampling.** `python scripts/rescore_4dfr.py` scores the crystal
+pose and the docked poses with the same Vina call. The crystal pose scores
+worse than the docked top pose in all 10 runs (variants A and B, five seeds
+each):
+
+| Variant | Gap, native minus docked top (kcal/mol) | Median |
+|---------|-----------------------------------------|--------|
+| A       | +0.90 to +1.32                          | +1.24  |
+| B       | +0.55 to +1.75                          | +0.96  |
+
+The intermolecular term alone also favours the wrong pose (crystal about -12.3
+kcal/mol against -13.2 to -15.1 for the docked top poses), so this is not an
+intramolecular-strain artefact. The crystal pose is a stable Vina minimum:
+local minimisation moves it only about 0.3 A. Vina therefore ranks wrong poses
+above the experimental one, and more sampling cannot fix that.
+
+**Caveats and untested factors.**
+
+- The gap (about 1 kcal/mol) is small compared with typical scoring-function
+  error.
+- Conserved active-site waters are removed from the receptor and may matter for
+  this complex. Keeping waters near the ligand has not been tried.
+- Vina has no explicit electrostatics, so a strongly charged ligand such as
+  methotrexate is a weak case for it.
+- The crystal-pose hydrogens were placed geometrically, not force-field
+  relaxed.
+
+**Decision.**
+
+- 4DFR stays in `BENCHMARK_SET` as a known hard case.
+- Ligand preparation keeps the neutral default. `run_redock(..., protonation=...)`
+  still accepts `"anion"` and `"bound"` for experiments.
+- Any future protonation step (for example Dimorphite-DL) should be adopted
+  only if it improves the full multi-seed benchmark, not 4DFR alone.
 
 ## Notes
 
 - 1KV1 uses ligand code `BMU`, a small pyrazole urea fragment, not BIRB-796.
-- Crystal waters are not modelled.
+- Crystal waters are not modelled (see the 4DFR caveats above).
 - To extend the suite, add a row to `BENCHMARK_SET` in
   `biosim/workflows/benchmark.py`.
