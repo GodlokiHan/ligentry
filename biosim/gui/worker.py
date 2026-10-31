@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
@@ -44,6 +45,8 @@ class DockWorker(QThread):
         n_ligands: int,
         exhaustiveness: int,
         workdir: Path,
+        enumerate_stereo: bool = True,
+        max_isomers: int = 8,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -53,6 +56,13 @@ class DockWorker(QThread):
         self.n_ligands = n_ligands
         self.exhaustiveness = exhaustiveness
         self.workdir = workdir
+        self.enumerate_stereo = enumerate_stereo
+        self.max_isomers = max_isomers
+        self._stop = threading.Event()
+
+    def request_stop(self) -> None:
+        """Ask the run to end early. It stops between Vina calls, keeping results so far."""
+        self._stop.set()
 
     def run(self) -> None:
         logger = logging.getLogger("biosim")
@@ -70,7 +80,9 @@ class DockWorker(QThread):
             if not ligands:
                 raise ValueError("No ligands to dock.")
             rows = run_docking(
-                self.pdb_id, ligands, self.workdir, exhaustiveness=self.exhaustiveness
+                self.pdb_id, ligands, self.workdir, exhaustiveness=self.exhaustiveness,
+                enumerate_stereo=self.enumerate_stereo, max_isomers=self.max_isomers,
+                should_stop=self._stop.is_set,
             )
             self.docked.emit(rows)
         except Exception as exc:

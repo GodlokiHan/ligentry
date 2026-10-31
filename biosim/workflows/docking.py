@@ -5,6 +5,7 @@ import csv
 import logging
 import os
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 import biosim.plugins  # noqa: F401  (registers plugins)
@@ -30,6 +31,7 @@ def run_docking(
     padding: float = 5.0,
     enumerate_stereo: bool = True,
     max_isomers: int = DEFAULT_MAX_ISOMERS,
+    should_stop: Callable[[], bool] | None = None,
 ) -> list[dict]:
     """Dock every ligand and return rows ranked by Vina score.
 
@@ -39,9 +41,17 @@ def run_docking(
     and the best-scoring one represents the ligand: its pose is saved as
     poses/<name>.pdbqt and its SMILES goes in `best_isomer_smiles`.
     With enumerate_stereo=False the behaviour is the original one-SMILES-one-dock.
+
+    `should_stop` is polled before each ligand and between isomers (never in the
+    middle of a Vina call). When it returns True the run ends early: ligands
+    already docked are kept, a ligand interrupted between isomers is kept with
+    the isomers docked so far, and results.csv is still written.
     """
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
+
+    def stop_requested() -> bool:
+        return bool(should_stop and should_stop())
 
     log.info("Downloading %s", pdb_id)
     pdb_file = download_pdb(pdb_id, workdir)
@@ -59,7 +69,11 @@ def run_docking(
     poses_dir.mkdir(exist_ok=True)
 
     rows: list[dict] = []
+    stopped = False
     for i, (name, smiles) in enumerate(ligands, start=1):
+        if stop_requested():
+            stopped = True
+            break
         log.info("[%d/%d] %s", i, len(ligands), name)  # the GUI progress bar parses this line
         row = {
             "name": name, "smiles": smiles, "best_isomer_smiles": smiles, "n_isomers": 1,
@@ -68,6 +82,7 @@ def run_docking(
         safe = re.sub(r"[^A-Za-z0-9_.-]", "_", name)
         final_pose = poses_dir / f"{safe}.pdbqt"
         temp_poses: list[Path] = []
+        ligand_stopped = False
         try:
             if enumerate_stereo:
                 isomers, info = enumerate_isomers(smiles, max_isomers=max_isomers)
@@ -86,6 +101,9 @@ def run_docking(
             results: list[tuple[float, str, Path]] = []
             last_error: Exception | None = None
             for k, iso in enumerate(isomers, start=1):
+                if k > 1 and stop_requested():
+                    ligand_stopped = True
+                    break
                 if len(isomers) > 1:
                     log.info("  isomer %d/%d", k, len(isomers))
                     pose_path = poses_dir / f"{safe}__iso{k}.pdbqt"
@@ -119,7 +137,9 @@ def run_docking(
                 os.replace(best_path, final_pose)
             row["vina_score_kcal_mol"] = round(best_score, 3)
             row["best_isomer_smiles"] = best_smiles
-            if len(results) < len(isomers):
+            if ligand_stopped:
+                row["status"] = f"ok (stopped: {len(results)}/{len(isomers)} isomers docked)"
+            elif len(results) < len(isomers):
                 row["status"] = f"ok ({len(results)}/{len(isomers)} isomers docked)"
         except Exception as exc:  # keep going; record the failure
             row["status"] = f"failed: {exc}"
@@ -128,6 +148,12 @@ def run_docking(
             for tmp in temp_poses:
                 tmp.unlink(missing_ok=True)
         rows.append(row)
+        if ligand_stopped:
+            stopped = True
+            break
+
+    if stopped:
+        log.info("Stopped by user: %d of %d ligand(s) docked", len(rows), len(ligands))
 
     rows.sort(key=lambda r: (r["vina_score_kcal_mol"] is None, r["vina_score_kcal_mol"] or 0.0))
 

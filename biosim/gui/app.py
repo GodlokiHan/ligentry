@@ -11,7 +11,7 @@ import psutil
 from PySide6.QtCore import QSettings, Qt, QTimer
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QFileDialog, QFormLayout, QHBoxLayout,
+    QAbstractItemView, QApplication, QCheckBox, QFileDialog, QFormLayout, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
     QProgressBar, QPushButton, QSpinBox, QSplitter, QStyle, QTableWidget,
     QTableWidgetItem, QToolBar, QVBoxLayout, QWidget,
@@ -44,6 +44,7 @@ class MainWindow(QMainWindow):
         self.rows: list[dict] = []  # table row i <-> self.rows[i]
         self.dirty = False
         self.running = False
+        self.stop_requested = False
         self._populating = False
 
         # run-state used by the timers
@@ -67,8 +68,24 @@ class MainWindow(QMainWindow):
         self.exh_spin = QSpinBox()
         self.exh_spin.setRange(1, 64)
         self.exh_spin.setValue(8)
+        self.stereo_check = QCheckBox("Enumerate unspecified stereoisomers")
+        self.stereo_check.setChecked(True)
+        self.stereo_check.setToolTip(
+            "Ligands whose SMILES leave stereocentres or double bonds unspecified are "
+            "docked as every isomer (up to the cap) and the best-scoring one is kept. "
+            "Slower: up to the cap times more docking per such ligand."
+        )
+        self.iso_spin = QSpinBox()
+        self.iso_spin.setRange(1, 64)
+        self.iso_spin.setValue(8)
+        self.iso_spin.setToolTip("Most isomers docked per ligand; more are sampled at random.")
+        self.stereo_check.toggled.connect(self.iso_spin.setEnabled)
         self.out_edit = QLineEdit("runs/gui")
         self.run_btn = QPushButton("Run docking")
+        self.stop_btn = QPushButton("Stop")
+        self.stop_btn.setToolTip(
+            "Finish the current docking step, keep the results so far and stop")
+        self.stop_btn.setEnabled(False)
 
         form = QFormLayout()
         form.addRow("PDB ID (with bound ligand)", self.pdb_edit)
@@ -76,7 +93,13 @@ class MainWindow(QMainWindow):
         form.addRow("Max ligands", self.n_spin)
         form.addRow("Ligand SMILES", self.smiles_edit)
         form.addRow("Exhaustiveness", self.exh_spin)
+        form.addRow("Stereoisomers", self.stereo_check)
+        form.addRow("Max isomers per ligand", self.iso_spin)
         form.addRow("Output folder", self.out_edit)
+
+        buttons = QHBoxLayout()
+        buttons.addWidget(self.run_btn, 3)
+        buttons.addWidget(self.stop_btn, 1)
 
         # progress, timers, CPU meter
         self.progress = QProgressBar()
@@ -108,6 +131,7 @@ class MainWindow(QMainWindow):
         header = self.table.horizontalHeader()
         header.setStretchLastSection(True)
         header.setSectionResizeMode(COL_NAME, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(COL_SCORE, QHeaderView.ResizeToContents)
 
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
@@ -117,7 +141,7 @@ class MainWindow(QMainWindow):
         left = QWidget()
         lay = QVBoxLayout(left)
         lay.addLayout(form)
-        lay.addWidget(self.run_btn)
+        lay.addLayout(buttons)
         lay.addWidget(self.progress)
         lay.addLayout(times)
         lay.addWidget(self.cpu_bar)
@@ -139,6 +163,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Ready")
 
         self.run_btn.clicked.connect(self.start)
+        self.stop_btn.clicked.connect(self.stop)
         self.table.itemSelectionChanged.connect(self.on_selection_changed)
         self.table.itemChanged.connect(self.on_item_changed)
 
@@ -199,6 +224,9 @@ class MainWindow(QMainWindow):
 
         self.act_run = self._action(
             "Run docking", self.start, "Ctrl+R", S.SP_MediaPlay, "Start docking with the form settings")
+        self.act_stop = self._action(
+            "Stop", self.stop, "Ctrl+.", S.SP_MediaStop,
+            "Finish the current docking step, keep the results so far and stop")
 
         self.act_show_log = self._action(
             "Show log", self.toggle_log, None, None, "Show or hide the log box", checkable=True)
@@ -231,6 +259,7 @@ class MainWindow(QMainWindow):
 
         run_menu = menubar.addMenu("&Run")
         run_menu.addAction(self.act_run)
+        run_menu.addAction(self.act_stop)
 
         view_menu = menubar.addMenu("&View")
         view_menu.addAction(self.act_show_log)
@@ -246,6 +275,7 @@ class MainWindow(QMainWindow):
             bar.addAction(action)
         bar.addSeparator()
         bar.addAction(self.act_run)
+        bar.addAction(self.act_stop)
         bar.addSeparator()
         for action in (self.act_edit_note, self.act_copy_smiles, self.act_remove, self.act_export):
             bar.addAction(action)
@@ -262,6 +292,9 @@ class MainWindow(QMainWindow):
         self.recent_menu.setEnabled(idle)
         self.act_run.setEnabled(idle)
         self.run_btn.setEnabled(idle)
+        can_stop = self.running and not self.stop_requested
+        self.act_stop.setEnabled(can_stop)
+        self.stop_btn.setEnabled(can_stop)
         self.act_save.setEnabled(idle and has_rows)
         self.act_save_as.setEnabled(idle and has_rows)
         self.act_export.setEnabled(has_rows)
@@ -552,6 +585,7 @@ class MainWindow(QMainWindow):
         self.set_dirty(False)
         self.log.clear()
         self.running = True
+        self.stop_requested = False
         self.update_actions()
 
         self.t_start = time.time()
@@ -566,12 +600,23 @@ class MainWindow(QMainWindow):
         self.worker = DockWorker(
             pdb_id, chembl, smiles_text, self.n_spin.value(),
             self.exh_spin.value(), self.workdir,
+            enumerate_stereo=self.stereo_check.isChecked(),
+            max_isomers=self.iso_spin.value(),
         )
         self.worker.log.connect(self.on_log)
         self.worker.docked.connect(self.on_done)
         self.worker.failed.connect(self.on_failed)
         self.worker.finished.connect(self.on_finished)
         self.worker.start()
+
+    def stop(self) -> None:
+        if not self.running or self.stop_requested or self.worker is None:
+            return
+        self.stop_requested = True
+        self.worker.request_stop()
+        self.log.appendPlainText("Stop requested: finishing the current docking step ...")
+        self.remaining_label.setText("Stopping ...")
+        self.update_actions()
 
     def on_log(self, text: str) -> None:
         self.log.appendPlainText(text)
@@ -600,6 +645,11 @@ class MainWindow(QMainWindow):
             self.progress.setValue(0)
             self.elapsed_label.setText(f"Elapsed {fmt_time(elapsed)}")
             self.remaining_label.setText("Stopped")
+        elif self.stop_requested:
+            self.progress.setRange(0, max(self.total, 1))
+            self.progress.setValue(len(self.rows))
+            self.elapsed_label.setText(f"Stopped after {fmt_time(elapsed)}")
+            self.remaining_label.setText("Stopped: partial results kept")
         else:
             self.progress.setRange(0, max(self.total, 1))
             self.progress.setValue(max(self.total, 1))
@@ -612,7 +662,8 @@ class MainWindow(QMainWindow):
         self.set_dirty(False)
         self.refresh_table(select=0 if self.rows else None)
         self._add_recent(self.workdir)
-        self.log.appendPlainText(f"Done. Results: {self.workdir / 'results.csv'}")
+        label = "Stopped. Partial results" if self.stop_requested else "Done. Results"
+        self.log.appendPlainText(f"{label}: {self.workdir / 'results.csv'}")
 
     # ---- timers -----------------------------------------------------------
 

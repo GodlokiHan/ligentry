@@ -141,6 +141,33 @@ with tempfile.TemporaryDirectory() as tmp:
           (off / "poses" / "two_centres.pdbqt").exists()
           and all(r["n_isomers"] == 1 for r in rows_off))
 
+    # ---- Stop callback ----
+    good = ligands[:3]  # two_centres (4 isomers), specified (1), salt (4)
+    vina_calls.clear()
+    rows_now = docking.run_docking("1ABC", good, tmp_path / "stop_now", should_stop=lambda: True)
+    check("stop before start: no rows, no Vina calls", rows_now == [] and not vina_calls)
+    with open(tmp_path / "stop_now" / "results.csv") as fh:
+        check("stop before start: results.csv still written (header only)",
+              list(csv.DictReader(fh)) == [])
+
+    vina_calls.clear()
+    rows_mid = docking.run_docking(
+        "1ABC", good, tmp_path / "stop_mid", should_stop=lambda: len(vina_calls) >= 2)
+    check("stop mid-ligand: 2 Vina calls, 1 partial row",
+          len(vina_calls) == 2 and len(rows_mid) == 1, str(rows_mid))
+    check("stop mid-ligand: status says stopped 2/4",
+          rows_mid[0]["status"] == "ok (stopped: 2/4 isomers docked)")
+    check("stop mid-ligand: pose kept, no __iso leftovers",
+          (tmp_path / "stop_mid" / "poses" / "two_centres.pdbqt").exists()
+          and not list((tmp_path / "stop_mid" / "poses").glob("*__iso*")))
+
+    vina_calls.clear()
+    rows_between = docking.run_docking(
+        "1ABC", good, tmp_path / "stop_between", should_stop=lambda: len(vina_calls) >= 4)
+    check("stop between ligands: first ligand complete, rest skipped",
+          [r["name"] for r in rows_between] == ["two_centres"]
+          and rows_between[0]["status"] == "ok")
+
 print()
 print("ALL PASSED" if not failures else f"{len(failures)} FAILED: {failures}")
 raise SystemExit(1 if failures else 0)
