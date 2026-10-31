@@ -3,14 +3,21 @@ from __future__ import annotations
 
 import csv
 import logging
+import os
 import re
 from pathlib import Path
 
 import biosim.plugins  # noqa: F401  (registers plugins)
 from biosim.core.plugin import get_plugin
 from biosim.data.pdb import download_pdb, extract_pocket
+from biosim.plugins.ligand_prep import DEFAULT_MAX_ISOMERS, enumerate_isomers
 
 log = logging.getLogger("biosim.docking")
+
+CSV_FIELDS = [
+    "rank", "name", "smiles", "best_isomer_smiles", "n_isomers",
+    "vina_score_kcal_mol", "status",
+]
 
 
 def run_docking(
@@ -21,7 +28,18 @@ def run_docking(
     exhaustiveness: int = 8,
     n_poses: int = 3,
     padding: float = 5.0,
+    enumerate_stereo: bool = True,
+    max_isomers: int = DEFAULT_MAX_ISOMERS,
 ) -> list[dict]:
+    """Dock every ligand and return rows ranked by Vina score.
+
+    With enumerate_stereo=True, unspecified stereocentres (and double bonds) in a
+    ligand's SMILES are expanded into explicit isomers (at most `max_isomers`,
+    sampled reproducibly when there are more). Each isomer is docked separately
+    and the best-scoring one represents the ligand: its pose is saved as
+    poses/<name>.pdbqt and its SMILES goes in `best_isomer_smiles`.
+    With enumerate_stereo=False the behaviour is the original one-SMILES-one-dock.
+    """
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
 
@@ -42,35 +60,79 @@ def run_docking(
 
     rows: list[dict] = []
     for i, (name, smiles) in enumerate(ligands, start=1):
-        log.info("[%d/%d] %s", i, len(ligands), name)
-        row = {"name": name, "smiles": smiles, "vina_score_kcal_mol": None, "status": "ok"}
+        log.info("[%d/%d] %s", i, len(ligands), name)  # the GUI progress bar parses this line
+        row = {
+            "name": name, "smiles": smiles, "best_isomer_smiles": smiles, "n_isomers": 1,
+            "vina_score_kcal_mol": None, "status": "ok",
+        }
+        safe = re.sub(r"[^A-Za-z0-9_.-]", "_", name)
+        final_pose = poses_dir / f"{safe}.pdbqt"
+        temp_poses: list[Path] = []
         try:
-            prepared = ligand_prep.run({"smiles": smiles}, workdir)
-            safe = re.sub(r"[^A-Za-z0-9_.-]", "_", name)
-            result = vina.run(
-                {
-                    "receptor_pdbqt": receptor["receptor_pdbqt"],
-                    "ligand_pdbqt": prepared["pdbqt"],
-                    "center": pocket.center,
-                    "size": pocket.size,
-                    "exhaustiveness": exhaustiveness,
-                    "n_poses": n_poses,
-                    "out_pdbqt": str(poses_dir / f"{safe}.pdbqt"),
-                },
-                workdir,
-            )
-            row["vina_score_kcal_mol"] = round(result["score"], 3)
+            if enumerate_stereo:
+                isomers, info = enumerate_isomers(smiles, max_isomers=max_isomers)
+                if info["n_unspecified"]:
+                    msg = "  %d unspecified stereo element(s) -> %d isomer(s) to dock"
+                    log.info(msg, info["n_unspecified"], len(isomers))
+                    if info["sampled"]:
+                        log.info(
+                            "  capped: sampled %d of %d possible isomers",
+                            len(isomers), info["n_possible"],
+                        )
+            else:
+                isomers = [smiles]
+            row["n_isomers"] = len(isomers)
+
+            results: list[tuple[float, str, Path]] = []
+            last_error: Exception | None = None
+            for k, iso in enumerate(isomers, start=1):
+                if len(isomers) > 1:
+                    log.info("  isomer %d/%d", k, len(isomers))
+                    pose_path = poses_dir / f"{safe}__iso{k}.pdbqt"
+                    temp_poses.append(pose_path)
+                else:
+                    pose_path = final_pose
+                try:
+                    prepared = ligand_prep.run({"smiles": iso}, workdir)
+                    result = vina.run(
+                        {
+                            "receptor_pdbqt": receptor["receptor_pdbqt"],
+                            "ligand_pdbqt": prepared["pdbqt"],
+                            "center": pocket.center,
+                            "size": pocket.size,
+                            "exhaustiveness": exhaustiveness,
+                            "n_poses": n_poses,
+                            "out_pdbqt": str(pose_path),
+                        },
+                        workdir,
+                    )
+                    results.append((float(result["score"]), iso, pose_path))
+                except Exception as exc:  # one bad isomer must not sink the ligand
+                    last_error = exc
+                    log.warning("  isomer %d failed: %s", k, exc)
+
+            if not results:
+                raise last_error if last_error else RuntimeError("no isomers to dock")
+
+            best_score, best_smiles, best_path = min(results, key=lambda r: r[0])
+            if best_path != final_pose:
+                os.replace(best_path, final_pose)
+            row["vina_score_kcal_mol"] = round(best_score, 3)
+            row["best_isomer_smiles"] = best_smiles
+            if len(results) < len(isomers):
+                row["status"] = f"ok ({len(results)}/{len(isomers)} isomers docked)"
         except Exception as exc:  # keep going; record the failure
             row["status"] = f"failed: {exc}"
             log.warning("  %s", row["status"])
+        finally:
+            for tmp in temp_poses:
+                tmp.unlink(missing_ok=True)
         rows.append(row)
 
     rows.sort(key=lambda r: (r["vina_score_kcal_mol"] is None, r["vina_score_kcal_mol"] or 0.0))
 
     with open(workdir / "results.csv", "w", newline="") as fh:
-        writer = csv.DictWriter(
-            fh, fieldnames=["rank", "name", "smiles", "vina_score_kcal_mol", "status"]
-        )
+        writer = csv.DictWriter(fh, fieldnames=CSV_FIELDS)
         writer.writeheader()
         for rank, row in enumerate(rows, start=1):
             writer.writerow({"rank": rank, **row})
