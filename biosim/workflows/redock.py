@@ -235,6 +235,51 @@ def _pose_models(pdbqt_path: str) -> tuple[list[list[tuple[str, float, float, fl
     return models, scores
 
 
+PROTONATION_STATES = ("neutral", "anion", "bound")
+
+
+def _protonate_smiles(smiles: str, state: str) -> str:
+    """Return `smiles` in the requested protonation state.
+
+    neutral : acids and bases neutralised (original behaviour, the default)
+    anion   : carboxylic acids deprotonated, as a pH 7.4 model would give
+    bound   : anion + N1 of a 2,4-diaminopyrimidine ring protonated. This mimics
+              methotrexate bound to DHFR, where N1-H+ salt-bridges Asp27. It is
+              specific to that chemotype and raises ValueError if it is absent.
+    """
+    from rdkit import Chem
+    from rdkit.Chem.MolStandardize import rdMolStandardize
+
+    if state not in PROTONATION_STATES:
+        raise ValueError(f"protonation must be one of {PROTONATION_STATES}, got '{state}'")
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        raise ValueError(f"RDKit could not parse SMILES: {smiles}")
+    mol = rdMolStandardize.Uncharger().uncharge(mol)
+    if state == "neutral":
+        return Chem.MolToSmiles(mol)
+
+    rw = Chem.RWMol(mol)
+    acid = Chem.MolFromSmarts("[CX3](=O)[OX2H1]")
+    for _c, _o, hydroxyl in rw.GetSubstructMatches(acid):
+        rw.GetAtomWithIdx(hydroxyl).SetFormalCharge(-1)
+
+    if state == "bound":
+        # ring N next to a fused carbon and to a carbon carrying NH2 (pteridine N1)
+        n1 = Chem.MolFromSmarts("[nX2;$(n(:[c;R2]):c-[NX3;H2])]")
+        hits = rw.GetSubstructMatches(n1)
+        if len(hits) != 1:
+            raise ValueError(f"expected exactly one pteridine N1, found {len(hits)}")
+        atom = rw.GetAtomWithIdx(hits[0][0])
+        atom.SetFormalCharge(1)
+        atom.SetNumExplicitHs(1)
+        atom.SetNoImplicit(True)
+
+    out = rw.GetMol()
+    Chem.SanitizeMol(out)
+    return Chem.MolToSmiles(out)
+
+
 def run_redock(
     pdb_id: str,
     workdir: str | Path,
@@ -243,6 +288,7 @@ def run_redock(
     exhaustiveness: int = 16,
     n_poses: int = 9,
     seed: int = 42,
+    protonation: str = "neutral",
 ) -> dict:
     from rdkit import Chem
     from rdkit.Chem import rdMolAlign
@@ -268,8 +314,12 @@ def run_redock(
     crystal = _mol_from_atoms(crystal_atoms, template)
     Chem.AssignStereochemistryFrom3D(crystal)
     neutral = rdMolStandardize.Uncharger().uncharge(Chem.Mol(crystal))
-    dock_smiles = Chem.MolToSmiles(neutral)
-    log.info("Ligand SMILES (stereo from crystal): %s", dock_smiles)
+    neutral_smiles = Chem.MolToSmiles(neutral)
+    if protonation == "neutral":
+        dock_smiles = neutral_smiles  # unchanged baseline behaviour
+    else:
+        dock_smiles = _protonate_smiles(neutral_smiles, protonation)
+    log.info("Ligand SMILES (stereo from crystal, %s): %s", protonation, dock_smiles)
 
     receptor = get_plugin("receptor_prep").run({"receptor_pdb": str(pocket.receptor_pdb)}, workdir)
     prepared = get_plugin("ligand_prep").run({"smiles": dock_smiles, "seed": seed}, workdir)
@@ -316,6 +366,8 @@ def run_redock(
         "ligand": resname,
         "ligand_smiles": dock_smiles,
         "seed": seed,
+        "protonation": protonation,
+        "exhaustiveness": exhaustiveness,
         "top_pose_rmsd": poses[0]["rmsd"],
         "best_rmsd_any_pose": min(p["rmsd"] for p in poses),
         "success_top_pose": poses[0]["rmsd"] <= SUCCESS_RMSD,
