@@ -28,7 +28,7 @@ BENCHMARK_SET: list[tuple[str, str, str]] = [
     ("1M17", "AQ4", "EGFR kinase / erlotinib"),
     ("3ERT", "OHT", "Estrogen receptor alpha / 4-hydroxytamoxifen"),
     ("4DFR", "MTX", "DHFR / methotrexate"),
-    ("1KV1", "BMU", "p38 MAP kinase / BIRB-796"),
+    ("1KV1", "BMU", "p38 MAP kinase / pyrazole urea (BMU)"),
     ("1EVE", "E20", "Acetylcholinesterase / donepezil"),
 ]
 
