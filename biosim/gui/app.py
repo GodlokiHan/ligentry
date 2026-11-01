@@ -237,9 +237,13 @@ class MainWindow(QMainWindow):
             "Reset 3D view", self.show_selected, None, S.SP_BrowserReload,
             "Re-centre the 3D view on the selected ligand")
         self.act_about = self._action("About biosim", self.about)
+        self.act_pkpd = self._action(
+            "PK/PD simulator...", self.open_pkpd, "Ctrl+Shift+P", S.SP_ComputerIcon,
+            "Open the pharmacokinetics / pharmacodynamics simulator")
 
     def _build_menus_and_toolbar(self) -> None:
         menubar = self.menuBar()
+        menubar.setNativeMenuBar(False)  # keep the menus inside the window (KDE global menu)
 
         file_menu = menubar.addMenu("&File")
         file_menu.addAction(self.act_new)
@@ -267,6 +271,9 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self.act_show_log)
         view_menu.addAction(self.act_reset_view)
 
+        tools_menu = menubar.addMenu("&Tools")
+        tools_menu.addAction(self.act_pkpd)
+
         help_menu = menubar.addMenu("&Help")
         help_menu.addAction(self.act_about)
 
@@ -283,7 +290,20 @@ class MainWindow(QMainWindow):
             bar.addAction(action)
         bar.addSeparator()
         bar.addAction(self.act_reset_view)
+        bar.addSeparator()
+        bar.addAction(self.act_pkpd)
         self.addToolBar(bar)
+
+    def open_pkpd(self) -> None:
+        from biosim.gui.pkpd_window import PKPDWindow
+
+        window = getattr(self, "pkpd_window", None)
+        if window is None:
+            window = PKPDWindow(self)
+            self.pkpd_window = window
+        window.show()
+        window.raise_()
+        window.activateWindow()
 
     def update_actions(self) -> None:
         has_rows = bool(self.rows)
