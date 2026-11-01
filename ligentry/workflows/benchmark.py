@@ -16,11 +16,11 @@ from pathlib import Path
 
 from rdkit import RDLogger
 
-from biosim.workflows.redock import SUCCESS_RMSD, run_redock
+from ligentry.workflows.redock import SUCCESS_RMSD, run_redock
 
 RDLogger.DisableLog("rdApp.warning")  # silence "More than one matching pattern" noise
 
-log = logging.getLogger("biosim.benchmark")
+log = logging.getLogger("ligentry.benchmark")
 
 # (PDB ID, ligand residue name, description)
 BENCHMARK_SET: list[tuple[str, str, str]] = [

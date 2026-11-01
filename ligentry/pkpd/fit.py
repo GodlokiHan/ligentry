@@ -13,7 +13,7 @@ from dataclasses import dataclass, replace
 import numpy as np
 from scipy.optimize import least_squares
 
-from biosim.pkpd.model import PKParameters, Regimen, simulate
+from ligentry.pkpd.model import PKParameters, Regimen, simulate
 
 FITTABLE = ("ka", "volume", "clearance", "vmax", "km")
 WEIGHTINGS = ("none", "proportional")

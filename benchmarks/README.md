@@ -1,4 +1,4 @@
-# biosim redocking benchmark
+# ligentry redocking benchmark
 
 Redocking of 8 crystal ligands across diverse targets. Each ligand is rebuilt
 from its RCSB chemical component SMILES (random 3D conformer, stereochemistry
@@ -12,10 +12,10 @@ majority of seeds.
 Run it:
 
 ```
-biosim benchmark --seeds 42 7 123 2024 99 --out runs/benchmark
+ligentry benchmark --seeds 42 7 123 2024 99 --out runs/benchmark
 ```
 
-Subset: `biosim benchmark --only 3PTB 1STP --seeds 42 7 --out runs/bench_subset`
+Subset: `ligentry benchmark --only 3PTB 1STP --seeds 42 7 --out runs/bench_subset`
 
 ## Baseline (Garuda Linux, `baseline_garuda.json`)
 
@@ -130,4 +130,4 @@ above the experimental one, and more sampling cannot fix that.
 - 1KV1 uses ligand code `BMU`, a small pyrazole urea fragment, not BIRB-796.
 - Crystal waters are not modelled (see the 4DFR caveats above).
 - To extend the suite, add a row to `BENCHMARK_SET` in
-  `biosim/workflows/benchmark.py`.
+  `ligentry/workflows/benchmark.py`.

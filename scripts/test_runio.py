@@ -1,11 +1,11 @@
-"""Checks for biosim.gui.runio (pure Python). Run: python scripts/test_runio.py"""
+"""Checks for ligentry.gui.runio (pure Python). Run: python scripts/test_runio.py"""
 from __future__ import annotations
 
 import csv
 import tempfile
 from pathlib import Path
 
-from biosim.gui import runio
+from ligentry.gui import runio
 
 failures: list[str] = []
 

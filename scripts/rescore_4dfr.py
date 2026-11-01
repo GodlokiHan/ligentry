@@ -30,8 +30,8 @@ import numpy as np
 from rdkit import Chem, RDLogger
 from rdkit.Chem import rdMolAlign
 
-from biosim.data.pdb import extract_pocket
-from biosim.workflows.redock import _crystal_ligand_atoms, _mol_from_atoms, _pose_models
+from ligentry.data.pdb import extract_pocket
+from ligentry.workflows.redock import _crystal_ligand_atoms, _mol_from_atoms, _pose_models
 
 RDLogger.DisableLog("rdApp.warning")
 

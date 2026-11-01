@@ -1,4 +1,4 @@
-"""biosim desktop application (Qt)."""
+"""ligentry desktop application (Qt)."""
 from __future__ import annotations
 
 import json
@@ -17,8 +17,8 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QToolBar, QVBoxLayout, QWidget,
 )
 
-from biosim.gui import runio
-from biosim.gui.viewer import MolViewer
+from ligentry.gui import runio
+from ligentry.gui.viewer import MolViewer
 
 _PROGRESS_RE = re.compile(r"\[(\d+)/(\d+)\]")  # "[3/20] name" from the docking log
 
@@ -38,7 +38,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.resize(1400, 850)
-        self.proc: QProcess | None = None  # docking runs in its own process (biosim.gui.job)
+        self.proc: QProcess | None = None  # docking runs in its own process (ligentry.gui.job)
         self._buffer = ""  # partial output line from the job
         self._last_error = ""
         self.workdir = Path("runs/gui")
@@ -236,7 +236,7 @@ class MainWindow(QMainWindow):
         self.act_reset_view = self._action(
             "Reset 3D view", self.show_selected, None, S.SP_BrowserReload,
             "Re-centre the 3D view on the selected ligand")
-        self.act_about = self._action("About biosim", self.about)
+        self.act_about = self._action("About ligentry", self.about)
         self.act_pkpd = self._action(
             "PK/PD simulator...", self.open_pkpd, "Ctrl+Shift+P", S.SP_ComputerIcon,
             "Open the pharmacokinetics / pharmacodynamics simulator")
@@ -295,7 +295,7 @@ class MainWindow(QMainWindow):
         self.addToolBar(bar)
 
     def open_pkpd(self) -> None:
-        from biosim.gui.pkpd_window import PKPDWindow
+        from ligentry.gui.pkpd_window import PKPDWindow
 
         window = getattr(self, "pkpd_window", None)
         if window is None:
@@ -327,9 +327,9 @@ class MainWindow(QMainWindow):
 
     def update_title(self) -> None:
         if self.rows:
-            self.setWindowTitle(f"biosim - {self.workdir}{' *' if self.dirty else ''}")
+            self.setWindowTitle(f"ligentry - {self.workdir}{' *' if self.dirty else ''}")
         else:
-            self.setWindowTitle("biosim")
+            self.setWindowTitle("ligentry")
 
     def set_dirty(self, flag: bool) -> None:
         self.dirty = flag
@@ -339,7 +339,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _settings() -> QSettings:
-        return QSettings("biosim", "biosim")
+        return QSettings("ligentry", "ligentry")
 
     def _recent(self) -> list[str]:
         value = self._settings().value("recent_runs", [])
@@ -413,7 +413,7 @@ class MainWindow(QMainWindow):
         if not self.dirty:
             return True
         answer = QMessageBox.question(
-            self, "biosim", "You have unsaved changes to the results. Save them first?",
+            self, "ligentry", "You have unsaved changes to the results. Save them first?",
             QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel, QMessageBox.Save,
         )
         if answer == QMessageBox.Save:
@@ -447,7 +447,7 @@ class MainWindow(QMainWindow):
         try:
             pdb_id, rows = runio.load_run(folder)
         except (runio.RunFolderError, OSError) as exc:
-            QMessageBox.warning(self, "biosim", str(exc))
+            QMessageBox.warning(self, "ligentry", str(exc))
             return
 
         self.workdir = Path(folder)
@@ -476,7 +476,7 @@ class MainWindow(QMainWindow):
         try:
             path = runio.save_results(self.workdir, self.rows)
         except (runio.RunFolderError, OSError) as exc:
-            QMessageBox.critical(self, "biosim", f"Could not save: {exc}")
+            QMessageBox.critical(self, "ligentry", f"Could not save: {exc}")
             return False
         self.set_dirty(False)
         self.statusBar().showMessage(f"Saved {path}")
@@ -496,7 +496,7 @@ class MainWindow(QMainWindow):
             runio.copy_run(self.workdir, dest)
             runio.save_results(dest, self.rows)
         except (runio.RunFolderError, OSError) as exc:
-            QMessageBox.critical(self, "biosim", f"Could not save as: {exc}")
+            QMessageBox.critical(self, "ligentry", f"Could not save as: {exc}")
             return False
         self.workdir = dest
         self.out_edit.setText(str(dest))
@@ -517,7 +517,7 @@ class MainWindow(QMainWindow):
         try:
             path = runio.export_csv(Path(chosen), self.rows)
         except OSError as exc:
-            QMessageBox.critical(self, "biosim", f"Could not export: {exc}")
+            QMessageBox.critical(self, "ligentry", f"Could not export: {exc}")
             return
         self.statusBar().showMessage(f"Exported {path}")
 
@@ -547,7 +547,7 @@ class MainWindow(QMainWindow):
             return
         name = self.rows[idx].get("name", "")
         answer = QMessageBox.question(
-            self, "biosim",
+            self, "ligentry",
             f"Remove '{name}' from the results table?\n"
             "Its pose file stays on disk; Save rewrites results.csv without it.",
         )
@@ -566,8 +566,8 @@ class MainWindow(QMainWindow):
 
     def about(self) -> None:
         QMessageBox.about(
-            self, "About biosim",
-            "biosim: an open-source platform for docking, drug effectiveness and "
+            self, "About ligentry",
+            "ligentry: an open-source platform for docking, drug effectiveness and "
             "protein folding simulations.\n\nDocking engine: AutoDock Vina. "
             "Chemistry: RDKit, Meeko, Open Babel.",
         )
@@ -575,7 +575,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         if self.running:
             QMessageBox.information(
-                self, "biosim", "Docking is still running. Wait for it to finish before closing.")
+                self, "ligentry", "Docking is still running. Wait for it to finish before closing.")
             event.ignore()
             return
         if not self.maybe_save():
@@ -592,10 +592,10 @@ class MainWindow(QMainWindow):
         chembl = self.chembl_edit.text().strip()
         smiles_text = self.smiles_edit.toPlainText()
         if len(pdb_id) != 4:
-            QMessageBox.warning(self, "biosim", "Enter a 4-character PDB ID.")
+            QMessageBox.warning(self, "ligentry", "Enter a 4-character PDB ID.")
             return
         if not chembl and not smiles_text.strip():
-            QMessageBox.warning(self, "biosim", "Enter a ChEMBL target or paste SMILES.")
+            QMessageBox.warning(self, "ligentry", "Enter a ChEMBL target or paste SMILES.")
             return
         if not self.maybe_save():
             return
@@ -645,7 +645,7 @@ class MainWindow(QMainWindow):
             job_path = self.workdir / "job.json"  # also a record of the run's settings
             job_path.write_text(json.dumps(spec, indent=2))
         except OSError as exc:
-            QMessageBox.critical(self, "biosim", f"Could not prepare the run folder: {exc}")
+            QMessageBox.critical(self, "ligentry", f"Could not prepare the run folder: {exc}")
             return False
 
         self._buffer = ""
@@ -655,7 +655,7 @@ class MainWindow(QMainWindow):
         self.proc.readyReadStandardOutput.connect(self.on_proc_output)
         self.proc.finished.connect(self.on_proc_finished)
         self.proc.errorOccurred.connect(self.on_proc_error)
-        self.proc.start(sys.executable, ["-u", "-m", "biosim.gui.job", str(job_path)])
+        self.proc.start(sys.executable, ["-u", "-m", "ligentry.gui.job", str(job_path)])
         return True
 
     def on_proc_output(self) -> None:
@@ -711,7 +711,7 @@ class MainWindow(QMainWindow):
             (self.workdir / "STOP").write_text("stop\n")  # the job polls for this file
         except OSError as exc:
             self.stop_requested = False
-            QMessageBox.warning(self, "biosim", f"Could not signal the job to stop: {exc}")
+            QMessageBox.warning(self, "ligentry", f"Could not signal the job to stop: {exc}")
             return
         self.log.appendPlainText("Stop requested: finishing the current docking step ...")
         self.remaining_label.setText("Stopping ...")
@@ -733,7 +733,7 @@ class MainWindow(QMainWindow):
     def on_failed(self, message: str) -> None:
         self.failed = True
         self.log.appendPlainText(f"FAILED: {message}")
-        QMessageBox.critical(self, "biosim", message)
+        QMessageBox.critical(self, "ligentry", message)
 
     def on_finished(self) -> None:
         elapsed = time.time() - self.t_start if self.t_start else 0.0

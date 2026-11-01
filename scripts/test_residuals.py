@@ -1,4 +1,4 @@
-"""Checks for biosim.pkpd.residuals (no Qt, numpy + scipy only).
+"""Checks for ligentry.pkpd.residuals (no Qt, numpy + scipy only).
 
     python scripts/test_residuals.py
 """
@@ -9,10 +9,10 @@ from dataclasses import replace
 
 import numpy as np
 
-from biosim.pkpd.model import simulate
-from biosim.pkpd.observations import Observations
-from biosim.pkpd.residuals import residuals_for
-from biosim.pkpd.workflow import ModelInputs, build_model
+from ligentry.pkpd.model import simulate
+from ligentry.pkpd.observations import Observations
+from ligentry.pkpd.residuals import residuals_for
+from ligentry.pkpd.workflow import ModelInputs, build_model
 
 _results: list[bool] = []
 

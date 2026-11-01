@@ -6,7 +6,7 @@ CPU core, which froze the Qt window ("not responding") whenever the desktop
 needed it. In a separate process the GUI is never blocked, a crash in a native
 library cannot take the window down, and the job runs at a lower priority.
 
-    python -m biosim.gui.job <job.json>
+    python -m ligentry.gui.job <job.json>
 
 job.json keys: pdb_id, chembl_target, smiles_text, n_ligands, exhaustiveness,
 workdir, enumerate_stereo, max_isomers.
@@ -43,7 +43,7 @@ def main(argv: list[str] | None = None, *, run=None, fetch=None) -> int:
     """Run one job. `run` and `fetch` can be injected for testing."""
     argv = sys.argv[1:] if argv is None else argv
     if len(argv) != 1:
-        print("ERROR: usage: python -m biosim.gui.job <job.json>", flush=True)
+        print("ERROR: usage: python -m ligentry.gui.job <job.json>", flush=True)
         return 2
     try:
         spec = json.loads(Path(argv[0]).read_text())
@@ -58,7 +58,7 @@ def main(argv: list[str] | None = None, *, run=None, fetch=None) -> int:
     except (AttributeError, OSError):
         pass
 
-    logger = logging.getLogger("biosim")
+    logger = logging.getLogger("ligentry")
     handler = logging.StreamHandler(sys.stdout)  # flushes after every record
     handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
     old_level = logger.level
@@ -69,7 +69,7 @@ def main(argv: list[str] | None = None, *, run=None, fetch=None) -> int:
         if chembl:
             print(f"Fetching actives for {chembl} ...", flush=True)
             if fetch is None:
-                from biosim.data.chembl import fetch_actives as fetch
+                from ligentry.data.chembl import fetch_actives as fetch
             ligands = fetch(chembl, limit=int(spec.get("n_ligands", 20)))
         else:
             ligands = parse_smiles_text(spec.get("smiles_text") or "")
@@ -77,7 +77,7 @@ def main(argv: list[str] | None = None, *, run=None, fetch=None) -> int:
             raise ValueError("No ligands to dock.")
 
         if run is None:
-            from biosim.workflows.docking import run_docking as run
+            from ligentry.workflows.docking import run_docking as run
         stop_path = workdir / STOP_FILE
         run(
             pdb_id, ligands, workdir,

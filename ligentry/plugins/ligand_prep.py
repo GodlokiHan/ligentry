@@ -5,7 +5,7 @@ import random
 from pathlib import Path
 from typing import Any
 
-from biosim.core.plugin import Plugin, register
+from ligentry.core.plugin import Plugin, register
 
 EMBED_SEEDS = (42, 7, 123, 2024, 99)
 

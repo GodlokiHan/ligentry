@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from biosim.core.plugin import Plugin, register
+from ligentry.core.plugin import Plugin, register
 
 
 @register

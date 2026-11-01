@@ -1,4 +1,4 @@
-"""Checks for biosim.pkpd.observations (no Qt, numpy + scipy only).
+"""Checks for ligentry.pkpd.observations (no Qt, numpy + scipy only).
 
     python scripts/test_observations.py
 """
@@ -10,9 +10,9 @@ from pathlib import Path
 
 import numpy as np
 
-from biosim.pkpd.fit import fit_concentration
-from biosim.pkpd.model import PKParameters, Regimen, simulate
-from biosim.pkpd.observations import (
+from ligentry.pkpd.fit import fit_concentration
+from ligentry.pkpd.model import PKParameters, Regimen, simulate
+from ligentry.pkpd.observations import (
     ObservationError,
     load_observations,
     parse_observations,

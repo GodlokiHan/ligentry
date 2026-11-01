@@ -59,7 +59,7 @@ def load_run(folder: str | Path) -> tuple[str, list[dict]]:
     with open(csv_path, newline="") as fh:
         reader = csv.DictReader(fh)
         if not reader.fieldnames or "name" not in reader.fieldnames:
-            raise RunFolderError(f"{csv_path} does not look like a biosim results file")
+            raise RunFolderError(f"{csv_path} does not look like a ligentry results file")
         for raw in reader:
             smiles = (raw.get("smiles") or "").strip()
             rows.append(

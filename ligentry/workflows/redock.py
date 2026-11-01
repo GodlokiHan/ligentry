@@ -15,15 +15,15 @@ from pathlib import Path
 import requests
 from rdkit import RDLogger
 
-import biosim.plugins  # noqa: F401  (registers plugins)
-from biosim.core.plugin import get_plugin
-from biosim.data.pdb import download_pdb, extract_pocket
+import ligentry.plugins  # noqa: F401  (registers plugins)
+from ligentry.core.plugin import get_plugin
+from ligentry.data.pdb import download_pdb, extract_pocket
 
 # Best-effort silencing of RDKit's harmless "More than one matching pattern" warnings.
 RDLogger.DisableLog("rdApp.warning")
 logging.getLogger("rdkit").setLevel(logging.ERROR)
 
-log = logging.getLogger("biosim.redock")
+log = logging.getLogger("ligentry.redock")
 
 SUCCESS_RMSD = 2.0  # Angstrom
 

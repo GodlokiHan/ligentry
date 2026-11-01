@@ -1,12 +1,12 @@
 """Fit the sigmoid Emax effect model to measured effects (no Qt).
 
-The model is the direct-effect relationship from biosim.pkpd.model:
+The model is the direct-effect relationship from ligentry.pkpd.model:
 
     E = E0 + Emax * C**h / (EC50**h + C**h)
 
 `fit_effect` works on pairs of (plasma concentration, measured effect). The
 concentration at each measurement time normally comes from the PK model, see
-biosim.pkpd.effect_workflow.
+ligentry.pkpd.effect_workflow.
 
 EC50 and the Hill slope are fitted on a log scale (always positive); E0 and Emax
 are fitted as they are, so Emax can be negative for an inhibitory effect. EC50
@@ -34,7 +34,7 @@ from dataclasses import dataclass, replace
 import numpy as np
 from scipy.optimize import least_squares
 
-from biosim.pkpd.model import EffectParameters
+from ligentry.pkpd.model import EffectParameters
 
 EFFECT_FITTABLE = ("e0", "emax", "ec50", "hill")
 _LOG_PARAMS = ("ec50", "hill")

@@ -15,15 +15,15 @@ from dataclasses import replace
 
 import numpy as np
 
-from biosim.pkpd.effect_data import EffectObservations
-from biosim.pkpd.effect_fit import (
+from ligentry.pkpd.effect_data import EffectObservations
+from ligentry.pkpd.effect_fit import (
     EFFECT_FITTABLE,
     EffectFitResult,
     fit_effect,
     guess_effect_start,
 )
-from biosim.pkpd.model import EffectParameters, effect_from_conc, simulate
-from biosim.pkpd.workflow import ModelInputs, build_model
+from ligentry.pkpd.model import EffectParameters, effect_from_conc, simulate
+from ligentry.pkpd.workflow import ModelInputs, build_model
 
 # parameter name -> (short label, unit); the effect unit is whatever the user measured
 EFFECT_PARAMETER_INFO = {

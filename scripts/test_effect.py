@@ -1,4 +1,4 @@
-"""Checks for effect-data loading, effect fitting and its glue (biosim.pkpd.effect_*).
+"""Checks for effect-data loading, effect fitting and its glue (ligentry.pkpd.effect_*).
 
     python scripts/test_effect.py
 
@@ -13,12 +13,12 @@ from pathlib import Path
 
 import numpy as np
 
-from biosim.pkpd.effect_data import (
+from ligentry.pkpd.effect_data import (
     load_effect_observations,
     parse_effect_observations,
 )
-from biosim.pkpd.effect_fit import fit_effect, guess_effect_start
-from biosim.pkpd.effect_workflow import (
+from ligentry.pkpd.effect_fit import fit_effect, guess_effect_start
+from ligentry.pkpd.effect_workflow import (
     apply_effect_fit,
     concentrations_at,
     effect_fit_notes,
@@ -26,9 +26,9 @@ from biosim.pkpd.effect_workflow import (
     predict_effects,
     run_effect_fit,
 )
-from biosim.pkpd.model import EffectParameters, effect_from_conc
-from biosim.pkpd.observations import ObservationError
-from biosim.pkpd.workflow import ModelInputs
+from ligentry.pkpd.model import EffectParameters, effect_from_conc
+from ligentry.pkpd.observations import ObservationError
+from ligentry.pkpd.workflow import ModelInputs
 
 PASSED = 0
 FAILED = 0

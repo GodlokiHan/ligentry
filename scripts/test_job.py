@@ -1,4 +1,4 @@
-"""Checks for biosim.gui.job (the separate-process docking job). Run: python scripts/test_job.py"""
+"""Checks for ligentry.gui.job (the separate-process docking job). Run: python scripts/test_job.py"""
 from __future__ import annotations
 
 import contextlib
@@ -9,7 +9,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from biosim.gui import job
+from ligentry.gui import job
 
 failures: list[str] = []
 
@@ -97,7 +97,7 @@ with tempfile.TemporaryDirectory() as tmp:
     # real subprocess, exactly how the GUI starts it: imports cleanly, fails gracefully
     p = write_spec(pdb_id="ZZZZ")
     proc = subprocess.run(
-        [sys.executable, "-u", "-m", "biosim.gui.job", str(p)],
+        [sys.executable, "-u", "-m", "ligentry.gui.job", str(p)],
         capture_output=True, text=True, timeout=120,
     )
     check("subprocess: bad PDB id -> exit 1 and an ERROR line (module imports outside Qt)",

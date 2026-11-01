@@ -1,4 +1,4 @@
-"""Checks for biosim.pkpd.workflow (no Qt, numpy + scipy only).
+"""Checks for ligentry.pkpd.workflow (no Qt, numpy + scipy only).
 
     python scripts/test_pkpd_workflow.py
 """
@@ -11,9 +11,9 @@ from pathlib import Path
 
 import numpy as np
 
-from biosim.pkpd.model import simulate
-from biosim.pkpd.observations import Observations, load_observations
-from biosim.pkpd.workflow import (
+from ligentry.pkpd.model import simulate
+from ligentry.pkpd.observations import Observations, load_observations
+from ligentry.pkpd.workflow import (
     LINEAR,
     MICHAELIS_MENTEN,
     ModelInputs,

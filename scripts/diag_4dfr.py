@@ -21,7 +21,7 @@ import statistics
 import time
 from pathlib import Path
 
-from biosim.workflows.redock import SUCCESS_RMSD, run_redock
+from ligentry.workflows.redock import SUCCESS_RMSD, run_redock
 
 PDB_ID = "4DFR"
 LIGAND = "MTX"

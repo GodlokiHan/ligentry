@@ -1,7 +1,7 @@
 """Glue between plain form values and the PK/PD model (no Qt, easy to test).
 
 The PK/PD window only gathers numbers from its widgets into a ModelInputs, calls
-the functions here and draws what comes back. Units are fixed across biosim.pkpd:
+the functions here and draws what comes back. Units are fixed across ligentry.pkpd:
 dose mg, volume L, clearance L/h, rates 1/h, time h, concentration mg/L.
 """
 from __future__ import annotations
@@ -13,15 +13,15 @@ from pathlib import Path
 
 import numpy as np
 
-from biosim.pkpd.fit import FitResult, fit_concentration
-from biosim.pkpd.model import (
+from ligentry.pkpd.fit import FitResult, fit_concentration
+from ligentry.pkpd.model import (
     EffectParameters,
     PKParameters,
     Regimen,
     Simulation,
     simulate,
 )
-from biosim.pkpd.observations import Observations
+from ligentry.pkpd.observations import Observations
 
 LINEAR = "linear"
 MICHAELIS_MENTEN = "michaelis_menten"

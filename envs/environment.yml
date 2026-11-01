@@ -1,4 +1,4 @@
-name: biosim
+name: ligentry
 channels:
   - conda-forge
 dependencies:

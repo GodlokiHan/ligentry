@@ -1,9 +1,9 @@
-"""Install (or remove) a desktop launcher for biosim-gui on Linux.
+"""Install (or remove) a desktop launcher for ligentry-gui on Linux.
 
     python scripts/install_launcher.py
     python scripts/install_launcher.py --uninstall
 
-Run it with the Python of the environment that has biosim installed. It writes
+Run it with the Python of the environment that has ligentry installed. It writes
 two files under ~/.local/share (no root needed): the application-menu entry and
 the icon.
 """
@@ -33,11 +33,11 @@ ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" widt
 
 DESKTOP_TEMPLATE = """[Desktop Entry]
 Type=Application
-Name=biosim
+Name=ligentry
 GenericName=Molecular docking
 Comment=Open-source molecular docking with a 3D viewer
 Exec="{exec_path}"
-Icon=biosim
+Icon=ligentry
 Terminal=false
 Categories=Science;Chemistry;Education;
 StartupNotify=true
@@ -55,14 +55,14 @@ def refresh_caches(apps_dir: Path) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Install the biosim desktop launcher")
+    parser = argparse.ArgumentParser(description="Install the ligentry desktop launcher")
     parser.add_argument("--uninstall", action="store_true", help="remove the launcher and icon")
     args = parser.parse_args()
 
     base = data_home()
     apps_dir = base / "applications"
-    desktop_path = apps_dir / "biosim.desktop"
-    icon_path = base / "icons" / "hicolor" / "scalable" / "apps" / "biosim.svg"
+    desktop_path = apps_dir / "ligentry.desktop"
+    icon_path = base / "icons" / "hicolor" / "scalable" / "apps" / "ligentry.svg"
 
     if args.uninstall:
         for path in (desktop_path, icon_path):
@@ -72,11 +72,11 @@ def main() -> int:
         refresh_caches(apps_dir)
         return 0
 
-    launcher = Path(sys.executable).parent / "biosim-gui"
+    launcher = Path(sys.executable).parent / "ligentry-gui"
     if not launcher.exists():
         print(
             f"Could not find {launcher}.\n"
-            "Activate the biosim environment and run: pip install -e . --no-deps",
+            "Activate the ligentry environment and run: pip install -e . --no-deps",
             file=sys.stderr,
         )
         return 1
@@ -90,7 +90,7 @@ def main() -> int:
 
     print(f"wrote {desktop_path}")
     print(f"wrote {icon_path}")
-    print("Look for 'biosim' in your application menu.")
+    print("Look for 'ligentry' in your application menu.")
     return 0
 
 

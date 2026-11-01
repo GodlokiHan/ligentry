@@ -1,4 +1,4 @@
-"""Command-line interface: `biosim dock`, `redock`, `benchmark`, `plugins`."""
+"""Command-line interface: `ligentry dock`, `redock`, `benchmark`, `plugins`."""
 from __future__ import annotations
 
 import argparse
@@ -6,12 +6,12 @@ import logging
 import sys
 from pathlib import Path
 
-import biosim.plugins  # noqa: F401
-from biosim.core.plugin import list_plugins
-from biosim.data.chembl import fetch_actives
-from biosim.workflows.benchmark import run_benchmark
-from biosim.workflows.docking import run_docking
-from biosim.workflows.redock import run_redock
+import ligentry.plugins  # noqa: F401
+from ligentry.core.plugin import list_plugins
+from ligentry.data.chembl import fetch_actives
+from ligentry.workflows.benchmark import run_benchmark
+from ligentry.workflows.docking import run_docking
+from ligentry.workflows.redock import run_redock
 
 
 def _read_smiles_file(path: Path) -> list[tuple[str, str]]:
@@ -26,7 +26,7 @@ def _read_smiles_file(path: Path) -> list[tuple[str, str]]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="biosim")
+    parser = argparse.ArgumentParser(prog="ligentry")
     sub = parser.add_subparsers(dest="command", required=True)
 
     dock = sub.add_parser("dock", help="Dock a ligand set into a PDB structure")

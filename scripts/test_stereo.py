@@ -1,6 +1,6 @@
 """Offline checks for stereoisomer enumeration and per-isomer docking.
 
-Run inside the biosim env:  python scripts/test_stereo.py
+Run inside the ligentry env:  python scripts/test_stereo.py
 Uses real RDKit + Meeko; Vina and receptor prep are faked, so no network is needed.
 """
 from __future__ import annotations
@@ -13,8 +13,8 @@ from types import SimpleNamespace
 
 from rdkit import RDLogger
 
-import biosim.workflows.docking as docking
-from biosim.plugins.ligand_prep import enumerate_isomers
+import ligentry.workflows.docking as docking
+from ligentry.plugins.ligand_prep import enumerate_isomers
 
 RDLogger.DisableLog("rdApp.warning")
 

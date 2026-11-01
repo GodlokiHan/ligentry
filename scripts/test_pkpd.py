@@ -1,4 +1,4 @@
-"""Checks for biosim.pkpd against closed-form solutions and parameter recovery.
+"""Checks for ligentry.pkpd against closed-form solutions and parameter recovery.
 
     python scripts/test_pkpd.py
 
@@ -11,8 +11,8 @@ from dataclasses import replace
 
 import numpy as np
 
-from biosim.pkpd.fit import fit_concentration
-from biosim.pkpd.model import (
+from ligentry.pkpd.fit import fit_concentration
+from ligentry.pkpd.model import (
     EffectParameters,
     PKParameters,
     Regimen,

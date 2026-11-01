@@ -2,10 +2,10 @@
 concentrations and effects, and fit the model parameters.
 
 This module only gathers numbers from the widgets and draws results. All the
-modelling lives in biosim.pkpd (workflow.py, model.py, fit.py, observations.py,
+modelling lives in ligentry.pkpd (workflow.py, model.py, fit.py, observations.py,
 effect_*.py), which is tested without Qt.
 
-Run it on its own with:  python -m biosim.gui.pkpd_window
+Run it on its own with:  python -m ligentry.gui.pkpd_window
 """
 from __future__ import annotations
 
@@ -45,11 +45,11 @@ from PySide6.QtWidgets import (
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
 
-from biosim.pkpd import effect_workflow, workflow
-from biosim.pkpd.effect_data import EffectObservations, load_effect_observations
-from biosim.pkpd.effect_residuals import effect_residuals_for
-from biosim.pkpd.observations import Observations, ObservationError, load_observations
-from biosim.pkpd.residuals import Residuals, residuals_for
+from ligentry.pkpd import effect_workflow, workflow
+from ligentry.pkpd.effect_data import EffectObservations, load_effect_observations
+from ligentry.pkpd.effect_residuals import effect_residuals_for
+from ligentry.pkpd.observations import Observations, ObservationError, load_observations
+from ligentry.pkpd.residuals import Residuals, residuals_for
 
 _INTRO = (
     "One-compartment oral model with a direct Emax effect. It is a teaching and "
@@ -75,7 +75,7 @@ _FIT_ERRORS = (ValueError, RuntimeError, FloatingPointError, np.linalg.LinAlgErr
 class PKPDWindow(QMainWindow):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("biosim - PK/PD simulator")
+        self.setWindowTitle("ligentry - PK/PD simulator")
         self.resize(1300, 820)
 
         self.obs: Observations | None = None
@@ -526,7 +526,7 @@ class PKPDWindow(QMainWindow):
         try:
             obs = load_observations(path)
         except ObservationError as exc:
-            QMessageBox.warning(self, "biosim", str(exc))
+            QMessageBox.warning(self, "ligentry", str(exc))
             return
         self.obs = obs
         self.last_dir = Path(path).parent
@@ -553,7 +553,7 @@ class PKPDWindow(QMainWindow):
             return
         free = [n for n, box in self.free_boxes.items() if box.isEnabled() and box.isChecked()]
         if not free:
-            QMessageBox.information(self, "biosim", "Tick at least one parameter to fit.")
+            QMessageBox.information(self, "ligentry", "Tick at least one parameter to fit.")
             return
         inputs = self.gather_inputs()
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
@@ -562,7 +562,7 @@ class PKPDWindow(QMainWindow):
                 inputs, self.obs, free, weighting=self.weight_combo.currentData()
             )
         except (ValueError, RuntimeError) as exc:
-            QMessageBox.warning(self, "biosim", f"The fit could not be done:\n{exc}")
+            QMessageBox.warning(self, "ligentry", f"The fit could not be done:\n{exc}")
             return
         finally:
             QApplication.restoreOverrideCursor()
@@ -597,7 +597,7 @@ class PKPDWindow(QMainWindow):
         try:
             eff_obs = load_effect_observations(path)
         except ObservationError as exc:
-            QMessageBox.warning(self, "biosim", str(exc))
+            QMessageBox.warning(self, "ligentry", str(exc))
             return
         self.eff_obs = eff_obs
         self.last_dir = Path(path).parent
@@ -624,7 +624,7 @@ class PKPDWindow(QMainWindow):
             return
         free = [n for n, box in self.eff_free_boxes.items() if box.isChecked()]
         if not free:
-            QMessageBox.information(self, "biosim", "Tick at least one effect parameter to fit.")
+            QMessageBox.information(self, "ligentry", "Tick at least one effect parameter to fit.")
             return
         inputs = self.gather_inputs()
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
@@ -633,7 +633,7 @@ class PKPDWindow(QMainWindow):
                 inputs, self.eff_obs, free, use_form_start=self.eff_form_start.isChecked()
             )
         except _FIT_ERRORS as exc:
-            QMessageBox.warning(self, "biosim", f"The effect fit could not be done:\n{exc}")
+            QMessageBox.warning(self, "ligentry", f"The effect fit could not be done:\n{exc}")
             return
         finally:
             QApplication.restoreOverrideCursor()
@@ -675,7 +675,7 @@ class PKPDWindow(QMainWindow):
 
     def export_csv(self) -> None:
         if self.last_result is None:
-            QMessageBox.information(self, "biosim", "Nothing to export yet.")
+            QMessageBox.information(self, "ligentry", "Nothing to export yet.")
             return
         path, _filter = QFileDialog.getSaveFileName(
             self, "Export simulation", str(self.last_dir / "pkpd_simulation.csv"),
@@ -686,7 +686,7 @@ class PKPDWindow(QMainWindow):
         try:
             workflow.simulation_to_csv(path, self.last_result)
         except OSError as exc:
-            QMessageBox.warning(self, "biosim", f"Could not write the file:\n{exc}")
+            QMessageBox.warning(self, "ligentry", f"Could not write the file:\n{exc}")
 
 
 def main() -> int:

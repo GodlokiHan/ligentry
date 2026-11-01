@@ -1,4 +1,4 @@
-# biosim
+# Ligentry
 
 Open-source desktop app for computational drug design: molecular docking with a 3D viewer and a built-in validation benchmark, plus a pharmacokinetic/pharmacodynamic (PK/PD) simulator. Protein-structure work is planned.
 
@@ -32,12 +32,12 @@ Units throughout: dose in mg, volume in L, clearance in L/h, rate constants in 1
 You need [micromamba](https://mamba.readthedocs.io/) (or conda). A GPU is not required.
 
 ```fish
-git clone <repo-url> biosim
-cd biosim
+git clone https://github.com/GodlokiHan/ligentry.git
+cd ligentry
 micromamba env create -f envs/environment.yml --override-channels -c conda-forge
-micromamba activate biosim
+micromamba activate ligentry
 pip install -e . --no-deps
-python scripts/install_launcher.py   # optional: adds "biosim" to your application menu
+python scripts/install_launcher.py   # optional: adds "ligentry" to your application menu
 ```
 
 The environment file pins the versions the benchmark baseline was measured with. Install the Qt and VTK packages from the pip entries in that file, not from conda: the conda builds could not reach the system OpenGL on the development machine. Use `--no-deps` with `pip install -e .` so pip does not replace the pinned packages.
@@ -46,7 +46,7 @@ The environment file pins the versions the benchmark baseline was measured with.
 
 ### Docking (GUI)
 
-Run `biosim-gui`, or open **biosim** from your application menu.
+Run `ligentry-gui`, or open **ligentry** from your application menu.
 
 1. Enter a PDB ID with a bound ligand (for example `1HSG`).
 2. Enter a ChEMBL target ID (for example `CHEMBL243`) or paste SMILES, one per line as `SMILES [name]`.
@@ -59,7 +59,7 @@ Use **File > Open run...** to reload an earlier run folder without docking again
 Open it from **Tools > PK/PD simulator** (or the toolbar button) in the docking window, or run it on its own:
 
 ```fish
-python -m biosim.gui.pkpd_window
+python -m ligentry.gui.pkpd_window
 ```
 
 1. Set the dose, regimen and PK parameters. The concentration curve updates as you change them.
@@ -70,10 +70,10 @@ python -m biosim.gui.pkpd_window
 ### Command line
 
 ```fish
-biosim plugins
-biosim dock --pdb 1HSG --chembl CHEMBL243 --n 20 --out runs/hiv_protease
-biosim redock --pdb 1HSG --seed 42 --out runs/redock_1hsg
-biosim benchmark --seeds 42 7 123 2024 99 --out runs/benchmark   # about 11 minutes
+ligentry plugins
+ligentry dock --pdb 1HSG --chembl CHEMBL243 --n 20 --out runs/hiv_protease
+ligentry redock --pdb 1HSG --seed 42 --out runs/redock_1hsg
+ligentry benchmark --seeds 42 7 123 2024 99 --out runs/benchmark   # about 11 minutes
 ```
 
 ## Validation (docking)
@@ -116,7 +116,7 @@ The measured baseline is in [`benchmarks/baseline_garuda.json`](benchmarks/basel
 ## Project layout
 
 ```
-biosim/
+ligentry/
   core/        plugin interface and registry
   data/        PDB and ChEMBL access
   plugins/     receptor prep (Open Babel), ligand prep (RDKit + Meeko), docking (Vina)
@@ -147,4 +147,4 @@ Each script ends with `ALL PASSED` (or a count of failures). The window code is 
 
 ## License and credits
 
-biosim is released under the Apache-2.0 license (see `LICENSE`). It builds on AutoDock Vina, RDKit, Meeko, Open Babel, PySide6, PyVista, VTK, NumPy, SciPy, Matplotlib, and the RCSB PDB and ChEMBL databases. Each has its own license, so check them before redistributing a bundled copy.
+Ligentry is released under the Apache-2.0 license (see `LICENSE`). It builds on AutoDock Vina, RDKit, Meeko, Open Babel, PySide6, PyVista, VTK, NumPy, SciPy, Matplotlib, and the RCSB PDB and ChEMBL databases. Each has its own license, so check them before redistributing a bundled copy.

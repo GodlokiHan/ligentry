@@ -15,10 +15,10 @@ are just times, observed and predicted values, so the unit is the caller's.
 """
 from __future__ import annotations
 
-from biosim.pkpd.effect_data import EffectObservations
-from biosim.pkpd.effect_workflow import predict_effects
-from biosim.pkpd.residuals import Residuals
-from biosim.pkpd.workflow import ModelInputs
+from ligentry.pkpd.effect_data import EffectObservations
+from ligentry.pkpd.effect_workflow import predict_effects
+from ligentry.pkpd.residuals import Residuals
+from ligentry.pkpd.workflow import ModelInputs
 
 
 def effect_residuals_for(inputs: ModelInputs, obs: EffectObservations) -> Residuals:

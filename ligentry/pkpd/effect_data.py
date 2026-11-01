@@ -7,7 +7,7 @@ effect in whatever unit you use (the unit is only a label; it is not converted).
     0.5,12.0
     1,31.5
 
-Accepted variations match biosim.pkpd.observations:
+Accepted variations match ligentry.pkpd.observations:
 - a header line (optional). When present, columns are found by name ("time",
   "t", "hours" / "effect", "response", "pd", ...), in any order, with extra
   columns ignored. A header with two unrecognised names is read as time, effect.
@@ -33,7 +33,7 @@ from pathlib import Path
 import numpy as np
 
 # Shared with the concentration loader so both accept the same file layouts.
-from biosim.pkpd.observations import (
+from ligentry.pkpd.observations import (
     ObservationError,
     _detect_delimiter,
     _is_time_name,

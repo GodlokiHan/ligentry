@@ -1,7 +1,7 @@
 """Load measured plasma concentrations from CSV-like text (no Qt, easy to test).
 
 Expected content: one observation per line, time in hours and concentration in
-mg/L, matching the units used everywhere in biosim.pkpd.
+mg/L, matching the units used everywhere in ligentry.pkpd.
 
     time,conc
     0.5,1.8

@@ -22,7 +22,7 @@ from pathlib import Path
 import numpy as np
 from rdkit import Chem, RDLogger
 
-from biosim.workflows.redock import _crystal_ligand_atoms, _pdb_block, _pose_models
+from ligentry.workflows.redock import _crystal_ligand_atoms, _pdb_block, _pose_models
 
 RDLogger.DisableLog("rdApp.warning")
 

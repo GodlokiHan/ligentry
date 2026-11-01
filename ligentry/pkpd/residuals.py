@@ -11,9 +11,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from biosim.pkpd.model import simulate
-from biosim.pkpd.observations import Observations
-from biosim.pkpd.workflow import ModelInputs, build_model
+from ligentry.pkpd.model import simulate
+from ligentry.pkpd.observations import Observations
+from ligentry.pkpd.workflow import ModelInputs, build_model
 
 
 @dataclass(frozen=True)

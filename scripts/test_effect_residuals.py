@@ -1,13 +1,13 @@
-"""Tests for biosim.pkpd.effect_residuals (no Qt). Run: python scripts/test_effect_residuals.py"""
+"""Tests for ligentry.pkpd.effect_residuals (no Qt). Run: python scripts/test_effect_residuals.py"""
 from __future__ import annotations
 
 import numpy as np
 
-from biosim.pkpd.effect_data import EffectObservations
-from biosim.pkpd.effect_residuals import effect_residuals_for
-from biosim.pkpd.effect_workflow import concentrations_at, form_effect
-from biosim.pkpd.model import effect_from_conc
-from biosim.pkpd.workflow import ModelInputs
+from ligentry.pkpd.effect_data import EffectObservations
+from ligentry.pkpd.effect_residuals import effect_residuals_for
+from ligentry.pkpd.effect_workflow import concentrations_at, form_effect
+from ligentry.pkpd.model import effect_from_conc
+from ligentry.pkpd.workflow import ModelInputs
 
 failures = 0
 

@@ -8,12 +8,12 @@ import re
 from collections.abc import Callable
 from pathlib import Path
 
-import biosim.plugins  # noqa: F401  (registers plugins)
-from biosim.core.plugin import get_plugin
-from biosim.data.pdb import download_pdb, extract_pocket
-from biosim.plugins.ligand_prep import DEFAULT_MAX_ISOMERS, enumerate_isomers
+import ligentry.plugins  # noqa: F401  (registers plugins)
+from ligentry.core.plugin import get_plugin
+from ligentry.data.pdb import download_pdb, extract_pocket
+from ligentry.plugins.ligand_prep import DEFAULT_MAX_ISOMERS, enumerate_isomers
 
-log = logging.getLogger("biosim.docking")
+log = logging.getLogger("ligentry.docking")
 
 CSV_FIELDS = [
     "rank", "name", "smiles", "best_isomer_smiles", "n_isomers",
