@@ -13,6 +13,8 @@ import os
 import sys
 from pathlib import Path
 
+import numpy as np
+
 os.environ.setdefault("QT_API", "pyside6")  # before matplotlib chooses a Qt binding
 
 from PySide6.QtCore import Qt, QTimer
@@ -45,6 +47,7 @@ from matplotlib.figure import Figure
 
 from biosim.pkpd import workflow
 from biosim.pkpd.observations import Observations, ObservationError, load_observations
+from biosim.pkpd.residuals import Residuals, residuals_for
 
 _INTRO = (
     "One-compartment oral model with a direct Emax effect. It is a teaching and "
@@ -184,7 +187,7 @@ class PKPDWindow(QMainWindow):
         lay = QVBoxLayout(data_box)
         lay.addWidget(self.data_label)
         lay.addLayout(data_row)
-        lay.addWidget(QLabel("Parameters to fit (starting from the values above):"))
+        lay.addWidget(QLabel("Parameters to fit (uses the dosing and starting values above):"))
         lay.addLayout(free_row)
         form = QFormLayout()
         form.addRow("Weighting", self.weight_combo)
@@ -328,23 +331,40 @@ class PKPDWindow(QMainWindow):
             self.tend_spin.setValue(result.t_end)
             self.tend_spin.blockSignals(False)
 
+        resid = None
+        if self.obs is not None and len(self.obs):
+            try:
+                resid = residuals_for(inputs, self.obs)
+            except (ValueError, RuntimeError):
+                resid = None
+
         m = result.metrics
-        self.metrics_label.setText(
+        text = (
             f"Cmax {m['cmax']:.4g} mg/L at {m['tmax']:.3g} h\n"
             f"AUC(0-{result.t_end:g} h) {m['auc']:.4g} mg*h/L"
         )
-        self.redraw(result)
+        if resid is not None:
+            text += f"\nAgainst the data: RMSE {resid.rmse:.4g} mg/L ({len(resid)} points)"
+        self.metrics_label.setText(text)
+        self.redraw(result, resid)
 
-    def redraw(self, result: workflow.SimulationResult) -> None:
+    def redraw(self, result: workflow.SimulationResult, resid: Residuals | None = None) -> None:
         sim = result.sim
-        self.fig.clear()
+        panels = ["conc"]
+        if resid is not None:
+            panels.append("resid")
         if sim.effect is not None:
-            ax_c, ax_e = self.fig.subplots(
-                2, 1, sharex=True, gridspec_kw={"height_ratios": [2, 1]}
-            )
-        else:
-            ax_c, ax_e = self.fig.subplots(), None
+            panels.append("effect")
+        ratios = {"conc": 3.0, "resid": 1.0, "effect": 1.5}
 
+        self.fig.clear()
+        axes = self.fig.subplots(
+            len(panels), 1, sharex=True, squeeze=False,
+            gridspec_kw={"height_ratios": [ratios[p] for p in panels]},
+        )[:, 0]
+        ax = dict(zip(panels, axes))
+
+        ax_c = ax["conc"]
         ax_c.plot(sim.t, sim.conc, color="#1f77b4", lw=1.8, label="model")
         if result.regimen.n_doses <= 40:
             for t in result.regimen.dose_times():
@@ -358,13 +378,25 @@ class PKPDWindow(QMainWindow):
         ax_c.grid(True, alpha=0.3)
         ax_c.legend(loc="upper right")
 
-        if ax_e is not None:
+        if "resid" in ax:
+            ax_r = ax["resid"]
+            r = resid.residual
+            ax_r.axhline(0.0, color="gray", lw=0.8)
+            ax_r.vlines(resid.times, 0.0, r, color="#d62728", lw=0.8, alpha=0.6)
+            ax_r.plot(resid.times, r, "o", color="#d62728", ms=4)
+            limit = float(np.max(np.abs(r))) * 1.25
+            if limit > 0:
+                ax_r.set_ylim(-limit, limit)
+            ax_r.set_ylabel("Residual\n(mg/L)")
+            ax_r.grid(True, alpha=0.3)
+
+        if "effect" in ax:
+            ax_e = ax["effect"]
             ax_e.plot(sim.t, sim.effect, color="#2ca02c", lw=1.8)
             ax_e.set_ylabel("Effect")
-            ax_e.set_xlabel("Time (h)")
             ax_e.grid(True, alpha=0.3)
-        else:
-            ax_c.set_xlabel("Time (h)")
+
+        axes[-1].set_xlabel("Time (h)")
         self.canvas.draw_idle()
 
     # ---- measured data and fitting ----------------------------------------------------------
