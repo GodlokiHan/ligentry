@@ -1,19 +1,31 @@
 # biosim
 
-Open-source molecular docking with a desktop GUI, a 3D viewer and a built-in validation benchmark. It is the first stage of a planned platform for computational drug design: docking now, with drug-effectiveness modelling and protein-structure work planned.
+Open-source desktop app for computational drug design: molecular docking with a 3D viewer and a built-in validation benchmark, plus a pharmacokinetic/pharmacodynamic (PK/PD) simulator. Protein-structure work is planned.
 
 **Status: early (v0.1.0).** Linux only for now. Windows is not supported yet.
 
 ## What it does
+
+### Docking
 
 - Dock a set of ligands into a protein target taken from the PDB. The binding pocket is defined by the ligand already bound in the crystal structure.
 - Ligands come from ChEMBL (known actives for a target) or pasted SMILES.
 - Ranked results table, an interactive 3D view of the pose in its pocket, per-ligand notes, and save/open/export of whole runs.
 - Unspecified stereocentres are expanded into explicit stereoisomers (capped, reproducible), and the best-scoring isomer represents each ligand.
 - Docking runs in a separate process, so the window stays responsive and **Stop** keeps everything finished so far.
-- A redocking benchmark that re-docks crystal ligands from known complexes and measures RMSD against the crystal pose.
+- A redocking benchmark re-docks crystal ligands from known complexes and measures RMSD against the crystal pose.
 
 Docking uses [AutoDock Vina](https://github.com/ccsb-scripps/AutoDock-Vina). Ligands are prepared with RDKit and Meeko, receptors with Open Babel.
+
+### PK/PD simulator
+
+- One-compartment oral model with linear or Michaelis-Menten elimination, single or repeated doses.
+- Direct sigmoid Emax effect model (a negative Emax models inhibition).
+- Load measured concentration data and fit the PK parameters, with standard errors, residuals and RMSE shown beside the plot.
+- Load measured effect data and fit E0, Emax, EC50 and (optionally) the Hill coefficient, using the concentrations predicted by the PK model. Effect residuals are plotted too: a smooth up-then-down pattern suggests a delayed effect that this model cannot capture.
+- Export the simulation as CSV.
+
+Units throughout: dose in mg, volume in L, clearance in L/h, rate constants in 1/h, time in h, concentration in mg/L.
 
 ## Install (Linux)
 
@@ -24,21 +36,38 @@ git clone <repo-url> biosim
 cd biosim
 micromamba env create -f envs/environment.yml --override-channels -c conda-forge
 micromamba activate biosim
-pip install -e .
+pip install -e . --no-deps
 python scripts/install_launcher.py   # optional: adds "biosim" to your application menu
 ```
 
-The environment file pins the versions the benchmark baseline was measured with. Install the Qt and VTK packages from the pip entries in that file, not from conda: the conda builds could not reach the system OpenGL on the development machine.
+The environment file pins the versions the benchmark baseline was measured with. Install the Qt and VTK packages from the pip entries in that file, not from conda: the conda builds could not reach the system OpenGL on the development machine. Use `--no-deps` with `pip install -e .` so pip does not replace the pinned packages.
 
 ## Use
 
-**GUI:** run `biosim-gui`, or open **biosim** from your application menu.
+### Docking (GUI)
+
+Run `biosim-gui`, or open **biosim** from your application menu.
 
 1. Enter a PDB ID with a bound ligand (for example `1HSG`).
 2. Enter a ChEMBL target ID (for example `CHEMBL243`) or paste SMILES, one per line as `SMILES [name]`.
 3. Press **Run docking** (Ctrl+R). Select a row to see its pose.
 
-**Command line:**
+Use **File > Open run...** to reload an earlier run folder without docking again.
+
+### PK/PD simulator
+
+Open it from **Tools > PK/PD simulator** (or the toolbar button) in the docking window, or run it on its own:
+
+```fish
+python -m biosim.gui.pkpd_window
+```
+
+1. Set the dose, regimen and PK parameters. The concentration curve updates as you change them.
+2. Optionally load measured concentrations (a CSV with time in h and concentration in mg/L) and press **Fit** to estimate the PK parameters.
+3. Tick **Effect** to add the effect curve. Optionally load measured effects (a CSV with time in h and effect), choose which parameters to fit and press **Fit effect**. Fit the PK first: the effect fit takes concentrations from the PK model currently in the form.
+4. **Use fitted effect values** copies the estimates back into the form.
+
+### Command line
 
 ```fish
 biosim plugins
@@ -47,7 +76,7 @@ biosim redock --pdb 1HSG --seed 42 --out runs/redock_1hsg
 biosim benchmark --seeds 42 7 123 2024 99 --out runs/benchmark   # about 11 minutes
 ```
 
-## Validation
+## Validation (docking)
 
 The benchmark redocks the crystal ligand of 8 diverse complexes with 5 seeds each. A run passes when the top-ranked pose is within 2 Å heavy-atom RMSD of the crystal pose, and a complex passes when most seeds do.
 
@@ -68,11 +97,21 @@ The measured baseline is in [`benchmarks/baseline_garuda.json`](benchmarks/basel
 
 ## Limitations
 
-- Vina scores are a screening heuristic, not binding affinities. Docking results are hypotheses, not evidence of activity.
+**Docking**
+
+- Vina scores are a screening heuristic, not binding affinities. A good docking score is a hypothesis, not evidence that a compound works.
 - Ligands are docked in their neutral form. There is no protonation-state modelling.
 - Crystal waters and cofactors are removed from the receptor, and the receptor is rigid.
 - The pocket comes from the ligand bound in the PDB structure you choose.
 - Stereoisomer enumeration multiplies docking time for ligands with many unspecified centres (default cap: 8 isomers per ligand).
+
+**PK/PD**
+
+- The output is only as good as the parameters and data you supply. It is a modelling tool, not a prediction of how a drug behaves in people.
+- One compartment and direct effect only. A delayed effect shows up as a pattern in the effect residuals but is not modelled.
+- From oral data alone, bioavailability F and volume V cannot be separated: the fitted volume is V/F and the fitted clearance is CL/F.
+- Absorption and elimination can be swapped (flip-flop kinetics) when only oral data are fitted.
+- EC50 and Emax trade off against each other when the measured concentrations never approach EC50, so the fit notes may warn about wide uncertainty.
 
 ## Project layout
 
@@ -82,26 +121,30 @@ biosim/
   data/        PDB and ChEMBL access
   plugins/     receptor prep (Open Babel), ligand prep (RDKit + Meeko), docking (Vina)
   workflows/   docking, redocking, benchmark
-  gui/         Qt window, 3D viewer, background docking job
+  gui/         docking window, 3D viewer, background docking job, PK/PD window, launcher
+  pkpd/        PK/PD models, fitting, data loaders, residuals (no Qt dependency)
   cli.py       command-line interface
-scripts/       tests and the 4DFR investigation
+scripts/       tests, launcher installer, 4DFR investigation
 benchmarks/    benchmark documentation and baseline
 ```
 
-Each wrapped tool is a plugin behind a common interface, so engines can be swapped without touching the workflows.
+Each wrapped docking tool is a plugin behind a common interface, so engines can be swapped without touching the workflows. Scientific logic lives in Qt-free modules with their own test scripts; the windows stay thin.
 
 ## Tests
 
 ```fish
-python scripts/test_stereo.py
-python scripts/test_runio.py
-python scripts/test_job.py
+for t in scripts/test_*.py; echo $t; python $t | tail -2; end
 ```
+
+Each script ends with `ALL PASSED` (or a count of failures). The window code is not covered by automated tests yet.
 
 ## Roadmap
 
-Drug-effectiveness modelling (pharmacokinetic/pharmacodynamic models) and protein-structure workflows are planned but not started. Replacing the Open Babel subprocess with a pure-Python route and a Windows port are also open.
+- PK/PD: two-compartment model, delayed (effect-compartment) response, joint PK and PD fitting, SBML import.
+- Docking: OpenMM pose refinement and rescoring (aimed at the 1HSG and 1EVE ranking failures), a protonation step if it improves the full benchmark, command-line flags for stereoisomer options.
+- Protein-structure workflows.
+- Replace the Open Babel subprocess with a pure-Python route, and port to Windows.
 
 ## License and credits
 
-biosim is released under the Apache-2.0 license (see `LICENSE`). It builds on AutoDock Vina, RDKit, Meeko, Open Babel, PySide6, PyVista, VTK, and the RCSB PDB and ChEMBL databases. Each has its own license, so check them before redistributing a bundled copy.
+biosim is released under the Apache-2.0 license (see `LICENSE`). It builds on AutoDock Vina, RDKit, Meeko, Open Babel, PySide6, PyVista, VTK, NumPy, SciPy, Matplotlib, and the RCSB PDB and ChEMBL databases. Each has its own license, so check them before redistributing a bundled copy.
