@@ -1,9 +1,9 @@
 """PK/PD simulator window: simulate a dosing regimen, compare it with measured
-concentrations and fit the model parameters.
+concentrations and effects, and fit the model parameters.
 
 This module only gathers numbers from the widgets and draws results. All the
-modelling lives in biosim.pkpd (workflow.py, model.py, fit.py, observations.py),
-which is tested without Qt.
+modelling lives in biosim.pkpd (workflow.py, model.py, fit.py, observations.py,
+effect_*.py), which is tested without Qt.
 
 Run it on its own with:  python -m biosim.gui.pkpd_window
 """
@@ -45,7 +45,9 @@ from PySide6.QtWidgets import (
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
 
-from biosim.pkpd import workflow
+from biosim.pkpd import effect_workflow, workflow
+from biosim.pkpd.effect_data import EffectObservations, load_effect_observations
+from biosim.pkpd.effect_residuals import effect_residuals_for
 from biosim.pkpd.observations import Observations, ObservationError, load_observations
 from biosim.pkpd.residuals import Residuals, residuals_for
 
@@ -61,6 +63,13 @@ _PARAMETER_BOXES = (  # fit checkbox label, parameter name
     ("Vmax", "vmax"),
     ("Km", "km"),
 )
+_EFFECT_BOXES = (  # fit checkbox label, parameter name, ticked by default
+    ("E0", "e0", True),
+    ("Emax", "emax", True),
+    ("EC50", "ec50", True),
+    ("Hill", "hill", False),
+)
+_FIT_ERRORS = (ValueError, RuntimeError, FloatingPointError, np.linalg.LinAlgError)
 
 
 class PKPDWindow(QMainWindow):
@@ -70,8 +79,10 @@ class PKPDWindow(QMainWindow):
         self.resize(1300, 820)
 
         self.obs: Observations | None = None
+        self.eff_obs: EffectObservations | None = None
         self.last_result: workflow.SimulationResult | None = None
         self.last_fit = None
+        self.last_effect_fit = None
         self.last_dir = Path.home()
 
         d = workflow.ModelInputs()
@@ -116,6 +127,12 @@ class PKPDWindow(QMainWindow):
         self.emax_spin = self._spin(d.emax, -1e6, 1e6, 4, "")
         self.ec50_spin = self._spin(d.ec50, 0.0001, 1e5, 4, " mg/L")
         self.hill_spin = self._spin(d.hill, 0.1, 10.0, 2, "")
+        self._effect_spins = {
+            "e0": self.e0_spin,
+            "emax": self.emax_spin,
+            "ec50": self.ec50_spin,
+            "hill": self.hill_spin,
+        }
         self.effect_box = QGroupBox("Effect (direct Emax model)")
         self.effect_box.setCheckable(True)
         self.effect_box.setChecked(False)
@@ -143,7 +160,7 @@ class PKPDWindow(QMainWindow):
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
 
-        # ---- measured data and fitting -----------------------------------------------------
+        # ---- measured concentrations and fitting ---------------------------------------------
         self.data_label = QLabel("No data loaded")
         self.data_label.setWordWrap(True)
         self.load_btn = QPushButton("Load data...")
@@ -196,6 +213,62 @@ class PKPDWindow(QMainWindow):
         lay.addWidget(self.fit_table)
         lay.addWidget(self.fit_info)
 
+        # ---- measured effects and effect fitting -----------------------------------------------
+        self.eff_data_label = QLabel("No effect data loaded")
+        self.eff_data_label.setWordWrap(True)
+        self.eff_load_btn = QPushButton("Load effect data...")
+        self.eff_load_btn.setToolTip(
+            "CSV with time (h) and effect columns. The concentration at each time comes from "
+            "the PK model entered above, so fit or enter the PK parameters first."
+        )
+        self.eff_load_btn.clicked.connect(self.load_effect_data)
+        self.eff_clear_btn = QPushButton("Clear effect data")
+        self.eff_clear_btn.clicked.connect(self.clear_effect_data)
+        eff_data_row = QHBoxLayout()
+        eff_data_row.addWidget(self.eff_load_btn)
+        eff_data_row.addWidget(self.eff_clear_btn)
+
+        self.eff_free_boxes: dict[str, QCheckBox] = {}
+        eff_free_row = QHBoxLayout()
+        for label, name, ticked in _EFFECT_BOXES:
+            box = QCheckBox(label)
+            box.setChecked(ticked)
+            self.eff_free_boxes[name] = box
+            eff_free_row.addWidget(box)
+        self.eff_form_start = QCheckBox("Start from the values above (not guessed from the data)")
+        self.eff_form_start.setToolTip(
+            "By default the fitted parameters start from values guessed from the data and "
+            "the parameters you leave unticked keep the values in the Effect box."
+        )
+        self.eff_fit_btn = QPushButton("Fit effect")
+        self.eff_fit_btn.setEnabled(False)
+        self.eff_fit_btn.clicked.connect(self.fit_effect_clicked)
+        self.eff_apply_btn = QPushButton("Use fitted effect values")
+        self.eff_apply_btn.setEnabled(False)
+        self.eff_apply_btn.clicked.connect(self.apply_effect_fit_clicked)
+        eff_fit_row = QHBoxLayout()
+        eff_fit_row.addWidget(self.eff_fit_btn)
+        eff_fit_row.addWidget(self.eff_apply_btn)
+
+        self.eff_table = QTableWidget(0, 4)
+        self.eff_table.setHorizontalHeaderLabels(["Parameter", "Estimate", "Unit", "\u00b1 SE"])
+        self.eff_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.eff_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.eff_table.setMaximumHeight(140)
+        self.eff_info = QLabel("")
+        self.eff_info.setWordWrap(True)
+
+        eff_box = QGroupBox("Effect data and fitting")
+        lay = QVBoxLayout(eff_box)
+        lay.addWidget(self.eff_data_label)
+        lay.addLayout(eff_data_row)
+        lay.addWidget(QLabel("Effect parameters to fit (the PK model above supplies the concentrations):"))
+        lay.addLayout(eff_free_row)
+        lay.addWidget(self.eff_form_start)
+        lay.addLayout(eff_fit_row)
+        lay.addWidget(self.eff_table)
+        lay.addWidget(self.eff_info)
+
         self.export_btn = QPushButton("Export simulation CSV...")
         self.export_btn.clicked.connect(self.export_csv)
 
@@ -205,7 +278,7 @@ class PKPDWindow(QMainWindow):
         left = QWidget()
         left_lay = QVBoxLayout(left)
         for w in (intro, dosing, pk_box, self.effect_box, time_box, self.metrics_label,
-                  self.status_label, data_box, self.export_btn):
+                  self.status_label, data_box, eff_box, self.export_btn):
             left_lay.addWidget(w)
         left_lay.addStretch(1)
         scroll = QScrollArea()
@@ -312,9 +385,12 @@ class PKPDWindow(QMainWindow):
 
     def update_plot(self) -> None:
         inputs = self.gather_inputs()
-        min_t = 0.0
+        data_end = 0.0
         if self.obs is not None and len(self.obs):
-            min_t = float(self.obs.times.max()) * 1.05
+            data_end = max(data_end, float(self.obs.times.max()))
+        if self.eff_obs is not None and len(self.eff_obs):
+            data_end = max(data_end, float(self.eff_obs.times.max()))
+        min_t = data_end * 1.05
         try:
             result = workflow.simulate_inputs(inputs, min_t_end=min_t)
         except (ValueError, RuntimeError) as exc:
@@ -338,24 +414,41 @@ class PKPDWindow(QMainWindow):
             except (ValueError, RuntimeError):
                 resid = None
 
+        eresid = None
+        if self.eff_obs is not None and len(self.eff_obs):
+            try:
+                eresid = effect_residuals_for(inputs, self.eff_obs)
+            except (ValueError, RuntimeError):
+                eresid = None
+
         m = result.metrics
         text = (
             f"Cmax {m['cmax']:.4g} mg/L at {m['tmax']:.3g} h\n"
             f"AUC(0-{result.t_end:g} h) {m['auc']:.4g} mg*h/L"
         )
         if resid is not None:
-            text += f"\nAgainst the data: RMSE {resid.rmse:.4g} mg/L ({len(resid)} points)"
+            text += f"\nAgainst the concentration data: RMSE {resid.rmse:.4g} mg/L ({len(resid)} points)"
+        if eresid is not None:
+            text += f"\nAgainst the effect data: RMSE {eresid.rmse:.4g} ({len(eresid)} points)"
         self.metrics_label.setText(text)
-        self.redraw(result, resid)
+        self.redraw(result, resid, eresid)
 
-    def redraw(self, result: workflow.SimulationResult, resid: Residuals | None = None) -> None:
+    def redraw(
+        self,
+        result: workflow.SimulationResult,
+        resid: Residuals | None = None,
+        eresid: Residuals | None = None,
+    ) -> None:
         sim = result.sim
+        has_eff_data = self.eff_obs is not None and len(self.eff_obs) > 0
         panels = ["conc"]
         if resid is not None:
             panels.append("resid")
-        if sim.effect is not None:
+        if sim.effect is not None or has_eff_data:
             panels.append("effect")
-        ratios = {"conc": 3.0, "resid": 1.0, "effect": 1.5}
+        if eresid is not None:
+            panels.append("eresid")
+        ratios = {"conc": 3.0, "resid": 1.0, "effect": 1.5, "eresid": 1.0}
 
         self.fig.clear()
         axes = self.fig.subplots(
@@ -392,14 +485,36 @@ class PKPDWindow(QMainWindow):
 
         if "effect" in ax:
             ax_e = ax["effect"]
-            ax_e.plot(sim.t, sim.effect, color="#2ca02c", lw=1.8)
+            if sim.effect is not None:
+                ax_e.plot(sim.t, sim.effect, color="#2ca02c", lw=1.8, label="model")
+            if has_eff_data:
+                ax_e.plot(self.eff_obs.times, self.eff_obs.effect, "o", color="#9467bd", ms=5,
+                          label=f"data ({len(self.eff_obs)} points)")
+            if sim.effect is None:
+                ax_e.text(0.02, 0.94, "Tick the Effect box to draw the model curve",
+                          transform=ax_e.transAxes, va="top", fontsize=8, color="gray")
             ax_e.set_ylabel("Effect")
             ax_e.grid(True, alpha=0.3)
+            handles, _labels = ax_e.get_legend_handles_labels()
+            if handles:
+                ax_e.legend(loc="upper right")
+
+        if "eresid" in ax:
+            ax_er = ax["eresid"]
+            er = eresid.residual
+            ax_er.axhline(0.0, color="gray", lw=0.8)
+            ax_er.vlines(eresid.times, 0.0, er, color="#9467bd", lw=0.8, alpha=0.6)
+            ax_er.plot(eresid.times, er, "o", color="#9467bd", ms=4)
+            limit = float(np.max(np.abs(er))) * 1.25
+            if limit > 0:
+                ax_er.set_ylim(-limit, limit)
+            ax_er.set_ylabel("Residual\n(effect)")
+            ax_er.grid(True, alpha=0.3)
 
         axes[-1].set_xlabel("Time (h)")
         self.canvas.draw_idle()
 
-    # ---- measured data and fitting ----------------------------------------------------------
+    # ---- measured concentrations and fitting ------------------------------------------------
 
     def load_data(self) -> None:
         path, _filter = QFileDialog.getOpenFileName(
@@ -469,6 +584,94 @@ class PKPDWindow(QMainWindow):
         if self.last_fit is None:
             return
         self.set_inputs(workflow.apply_fit(self.gather_inputs(), self.last_fit))
+
+    # ---- measured effects and effect fitting -------------------------------------------------
+
+    def load_effect_data(self) -> None:
+        path, _filter = QFileDialog.getOpenFileName(
+            self, "Load measured effects", str(self.last_dir),
+            "Data files (*.csv *.tsv *.txt);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            eff_obs = load_effect_observations(path)
+        except ObservationError as exc:
+            QMessageBox.warning(self, "biosim", str(exc))
+            return
+        self.eff_obs = eff_obs
+        self.last_dir = Path(path).parent
+        self.eff_data_label.setText(f"{Path(path).name}: {len(eff_obs)} points")
+        self.eff_fit_btn.setEnabled(True)
+        self._reset_effect_fit_display()
+        self.schedule_update()
+
+    def clear_effect_data(self) -> None:
+        self.eff_obs = None
+        self.eff_data_label.setText("No effect data loaded")
+        self.eff_fit_btn.setEnabled(False)
+        self._reset_effect_fit_display()
+        self.schedule_update()
+
+    def _reset_effect_fit_display(self) -> None:
+        self.last_effect_fit = None
+        self.eff_table.setRowCount(0)
+        self.eff_info.setText("")
+        self.eff_apply_btn.setEnabled(False)
+
+    def fit_effect_clicked(self) -> None:
+        if self.eff_obs is None:
+            return
+        free = [n for n, box in self.eff_free_boxes.items() if box.isChecked()]
+        if not free:
+            QMessageBox.information(self, "biosim", "Tick at least one effect parameter to fit.")
+            return
+        inputs = self.gather_inputs()
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            result, conc = effect_workflow.run_effect_fit(
+                inputs, self.eff_obs, free, use_form_start=self.eff_form_start.isChecked()
+            )
+        except _FIT_ERRORS as exc:
+            QMessageBox.warning(self, "biosim", f"The effect fit could not be done:\n{exc}")
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        self.last_effect_fit = result
+        rows = effect_workflow.effect_fit_table_rows(result)
+        self.eff_table.setRowCount(len(rows))
+        for i, row in enumerate(rows):
+            for j, text in enumerate(row):
+                self.eff_table.setItem(i, j, QTableWidgetItem(text))
+        notes = effect_workflow.effect_fit_notes(result, conc)
+        self.eff_info.setText(
+            f"RMSE {result.rmse:.4g} over {result.n_obs} points."
+            + ("\n" + "\n".join(notes) if notes else "")
+        )
+        self.eff_apply_btn.setEnabled(True)
+
+    def apply_effect_fit_clicked(self) -> None:
+        if self.last_effect_fit is None:
+            return
+        fitted = self.last_effect_fit.effect
+        self.set_inputs(effect_workflow.apply_effect_fit(self.gather_inputs(), self.last_effect_fit))
+
+        # the boxes have fixed ranges and decimals: say so if a fitted value did not fit in them
+        shown = self.gather_inputs()
+        clipped = []
+        for name, spin in self._effect_spins.items():
+            want, got = getattr(fitted, name), getattr(shown, name)
+            tolerance = 0.5 * 10.0 ** (-spin.decimals()) + 1e-3 * abs(want)
+            if abs(want - got) > tolerance:
+                label = effect_workflow.EFFECT_PARAMETER_INFO[name][0]
+                clipped.append(f"{label} ({want:.4g} fitted, {got:.4g} shown)")
+        if clipped:
+            self.eff_info.setText(
+                self.eff_info.text()
+                + "\nThe box limits changed these values when they were copied: "
+                + "; ".join(clipped) + "."
+            )
 
     def export_csv(self) -> None:
         if self.last_result is None:
