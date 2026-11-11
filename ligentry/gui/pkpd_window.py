@@ -52,9 +52,9 @@ from ligentry.pkpd.observations import Observations, ObservationError, load_obse
 from ligentry.pkpd.residuals import Residuals, residuals_for
 
 _INTRO = (
-    "One-compartment oral model with a direct Emax effect. It is a teaching and "
-    "exploration tool: results are only as good as the parameters you enter, and "
-    "nothing here is dosing advice."
+    "One- or two-compartment model with oral or IV bolus dosing and a direct Emax "
+    "effect. It is a teaching and exploration tool: results are only as good as the "
+    "parameters you enter, and nothing here is dosing advice."
 )
 _PARAMETER_BOXES = (  # fit checkbox label, parameter name
     ("ka", "ka"),
@@ -62,6 +62,8 @@ _PARAMETER_BOXES = (  # fit checkbox label, parameter name
     ("CL", "clearance"),
     ("Vmax", "vmax"),
     ("Km", "km"),
+    ("V2", "peripheral_volume"),
+    ("Q", "intercompartmental_clearance"),
 )
 _EFFECT_BOXES = (  # fit checkbox label, parameter name, ticked by default
     ("E0", "e0", True),
@@ -94,8 +96,17 @@ class PKPDWindow(QMainWindow):
         self.n_spin.setRange(1, 500)
         self.n_spin.setValue(d.n_doses)
         self.n_spin.valueChanged.connect(self.schedule_update)
+        self.route_combo = QComboBox()
+        self.route_combo.addItem("Oral", workflow.ORAL)
+        self.route_combo.addItem("IV bolus", workflow.IV_BOLUS)
+        self.route_combo.setToolTip(
+            "Oral doses are absorbed with rate ka. An IV bolus goes straight into the central "
+            "compartment: ka and bioavailability then do not apply."
+        )
+        self.route_combo.currentIndexChanged.connect(self._structure_changed)
         dosing = QGroupBox("Dosing")
         form = QFormLayout(dosing)
+        form.addRow("Route", self.route_combo)
         form.addRow("Dose", self.dose_spin)
         form.addRow("Number of doses", self.n_spin)
         form.addRow("Interval between doses", self.interval_spin)
@@ -103,10 +114,16 @@ class PKPDWindow(QMainWindow):
         # ---- pharmacokinetics ----------------------------------------------------------
         self.ka_spin = self._spin(d.ka, 0.001, 100.0, 4, " 1/h")
         self.volume_spin = self._spin(d.volume, 0.01, 1e5, 3, " L")
+        self.comp_combo = QComboBox()
+        self.comp_combo.addItem("One compartment", 1)
+        self.comp_combo.addItem("Two compartments", 2)
+        self.comp_combo.currentIndexChanged.connect(self._structure_changed)
+        self.volume2_spin = self._spin(d.peripheral_volume, 0.01, 1e5, 3, " L")
+        self.q_spin = self._spin(d.intercompartmental_clearance, 0.001, 1e5, 4, " L/h")
         self.elim_combo = QComboBox()
         self.elim_combo.addItem("Linear (clearance)", workflow.LINEAR)
         self.elim_combo.addItem("Michaelis-Menten (Vmax, Km)", workflow.MICHAELIS_MENTEN)
-        self.elim_combo.currentIndexChanged.connect(self._elimination_changed)
+        self.elim_combo.currentIndexChanged.connect(self._structure_changed)
         self.clearance_spin = self._spin(d.clearance, 0.001, 1e5, 4, " L/h")
         self.vmax_spin = self._spin(d.vmax, 0.001, 1e6, 4, " mg/h")
         self.km_spin = self._spin(d.km, 0.0001, 1e5, 4, " mg/L")
@@ -114,8 +131,11 @@ class PKPDWindow(QMainWindow):
         self.f_spin.setToolTip("Fraction of each dose that reaches the gut (bioavailability F)")
         pk_box = QGroupBox("Pharmacokinetics")
         form = QFormLayout(pk_box)
+        form.addRow("Compartments", self.comp_combo)
         form.addRow("Absorption rate ka", self.ka_spin)
-        form.addRow("Volume V", self.volume_spin)
+        form.addRow("Volume V (central)", self.volume_spin)
+        form.addRow("Peripheral volume V2", self.volume2_spin)
+        form.addRow("Intercompartmental clearance Q", self.q_spin)
         form.addRow("Elimination", self.elim_combo)
         form.addRow("Clearance CL", self.clearance_spin)
         form.addRow("Vmax", self.vmax_spin)
@@ -309,7 +329,7 @@ class PKPDWindow(QMainWindow):
         self._timer.setInterval(120)
         self._timer.timeout.connect(self.update_plot)
 
-        self._elimination_changed()
+        self._structure_changed()
         self.update_plot()
 
     # ---- helpers ------------------------------------------------------------------------
@@ -329,14 +349,24 @@ class PKPDWindow(QMainWindow):
     def schedule_update(self, *_args) -> None:
         self._timer.start()
 
-    def _elimination_changed(self, *_args) -> None:
+    def _structure_changed(self, *_args) -> None:
+        """Enable only the boxes that apply to the chosen route, compartments and elimination."""
         linear = self.elim_combo.currentData() == workflow.LINEAR
+        oral = self.route_combo.currentData() == workflow.ORAL
+        two = self.comp_combo.currentData() == 2
         self.clearance_spin.setEnabled(linear)
         self.vmax_spin.setEnabled(not linear)
         self.km_spin.setEnabled(not linear)
+        self.ka_spin.setEnabled(oral)
+        self.f_spin.setEnabled(oral)
+        self.volume2_spin.setEnabled(two)
+        self.q_spin.setEnabled(two)
         self.free_boxes["clearance"].setEnabled(linear)
         self.free_boxes["vmax"].setEnabled(not linear)
         self.free_boxes["km"].setEnabled(not linear)
+        self.free_boxes["ka"].setEnabled(oral)
+        self.free_boxes["peripheral_volume"].setEnabled(two)
+        self.free_boxes["intercompartmental_clearance"].setEnabled(two)
         self.schedule_update()
 
     def _auto_time_changed(self, checked: bool) -> None:
@@ -361,6 +391,10 @@ class PKPDWindow(QMainWindow):
             ec50=self.ec50_spin.value(),
             hill=self.hill_spin.value(),
             t_end=None if self.auto_time.isChecked() else self.tend_spin.value(),
+            route=self.route_combo.currentData(),
+            compartments=self.comp_combo.currentData(),
+            peripheral_volume=self.volume2_spin.value(),
+            intercompartmental_clearance=self.q_spin.value(),
         )
 
     def set_inputs(self, inputs: workflow.ModelInputs) -> None:
@@ -379,6 +413,10 @@ class PKPDWindow(QMainWindow):
         self.emax_spin.setValue(inputs.emax)
         self.ec50_spin.setValue(inputs.ec50)
         self.hill_spin.setValue(inputs.hill)
+        self.route_combo.setCurrentIndex(max(self.route_combo.findData(inputs.route), 0))
+        self.comp_combo.setCurrentIndex(max(self.comp_combo.findData(inputs.compartments), 0))
+        self.volume2_spin.setValue(inputs.peripheral_volume)
+        self.q_spin.setValue(inputs.intercompartmental_clearance)
         self.schedule_update()
 
     # ---- simulate and draw ---------------------------------------------------------------
@@ -424,7 +462,8 @@ class PKPDWindow(QMainWindow):
         m = result.metrics
         text = (
             f"Cmax {m['cmax']:.4g} mg/L at {m['tmax']:.3g} h\n"
-            f"AUC(0-{result.t_end:g} h) {m['auc']:.4g} mg*h/L"
+            f"AUC(0-{result.t_end:g} h) {m['auc']:.4g} mg*h/L\n"
+            f"{workflow.half_life_text(result.pk)}"
         )
         if resid is not None:
             text += f"\nAgainst the concentration data: RMSE {resid.rmse:.4g} mg/L ({len(resid)} points)"

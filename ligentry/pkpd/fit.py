@@ -5,6 +5,13 @@ data, ka and the elimination rate can trade places and still fit the curve
 equally well (the "flip-flop" problem), so give a starting guess that is
 physically sensible, and use `bounds` (for example a lower bound on ka) when
 the absorption is known to be faster than the elimination.
+
+For a two-compartment model the peripheral volume and the intercompartmental
+clearance can be fitted as well. They are only well determined when the data
+include several samples from the early, rapidly falling distribution phase, and
+IV bolus data determine them far better than oral data, where the absorption
+phase hides the distribution phase. ka does not apply to IV bolus dosing and
+cannot be fitted there.
 """
 from __future__ import annotations
 
@@ -15,7 +22,9 @@ from scipy.optimize import least_squares
 
 from ligentry.pkpd.model import PKParameters, Regimen, simulate
 
-FITTABLE = ("ka", "volume", "clearance", "vmax", "km")
+FITTABLE = (
+    "ka", "volume", "clearance", "vmax", "km", "peripheral_volume", "intercompartmental_clearance",
+)
 WEIGHTINGS = ("none", "proportional")
 
 # Proportional weights divide by max(observed, this fraction of the largest observed
@@ -33,6 +42,7 @@ class FitResult:
     n_obs: int
     success: bool
     message: str
+    route: str = "oral"  # dosing route the fit was made with
 
 
 def fit_concentration(
@@ -64,6 +74,8 @@ def fit_concentration(
                 f"'{name}' has no starting value (it does not apply to "
                 f"{start_params.elimination} elimination)"
             )
+    if regimen.route == "iv_bolus" and "ka" in free:
+        raise ValueError("ka does not apply to IV bolus dosing, so it cannot be fitted")
     if times.size < len(free):
         raise ValueError(f"{times.size} observations cannot determine {len(free)} parameters")
 
@@ -109,4 +121,5 @@ def fit_concentration(
         n_obs=int(times.size),
         success=bool(sol.success),
         message=str(sol.message),
+        route=regimen.route,
     )
