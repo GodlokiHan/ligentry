@@ -19,11 +19,14 @@ Docking uses [AutoDock Vina](https://github.com/ccsb-scripps/AutoDock-Vina). Lig
 
 ### PK/PD simulator
 
-- One-compartment oral model with linear or Michaelis-Menten elimination, single or repeated doses.
+- One- or two-compartment model (central plus an optional peripheral compartment, set by its volume V2 and the intercompartmental clearance Q).
+- Oral or intravenous (IV) bolus dosing, single or repeated doses.
+- Linear (clearance) or Michaelis-Menten elimination, with either number of compartments.
+- Half-lives reported for the current parameters: terminal and distribution half-life for two compartments, terminal only for one.
 - Direct sigmoid Emax effect model (a negative Emax models inhibition).
-- Load measured concentration data and fit the PK parameters, with standard errors, residuals and RMSE shown beside the plot.
+- Load measured concentration data and fit the PK parameters, including V2 and Q, with standard errors, residuals and RMSE shown beside the plot. Fit notes point out weak spots such as phases that are not well separated, flip-flop kinetics, and apparent (V/F, CL/F) values after oral dosing.
 - Load measured effect data and fit E0, Emax, EC50 and (optionally) the Hill coefficient, using the concentrations predicted by the PK model. Effect residuals are plotted too: a smooth up-then-down pattern suggests a delayed effect that this model cannot capture.
-- Export the simulation as CSV.
+- Export the simulation as CSV (time, concentration, gut, central and, for two compartments, peripheral amounts, plus the effect when it is switched on).
 
 Units throughout: dose in mg, volume in L, clearance in L/h, rate constants in 1/h, time in h, concentration in mg/L.
 
@@ -62,10 +65,12 @@ Open it from **Tools > PK/PD simulator** (or the toolbar button) in the docking 
 python -m ligentry.gui.pkpd_window
 ```
 
-1. Set the dose, regimen and PK parameters. The concentration curve updates as you change them.
-2. Optionally load measured concentrations (a CSV with time in h and concentration in mg/L) and press **Fit** to estimate the PK parameters.
+1. Choose the route (oral or IV bolus), then set the dose, regimen and PK parameters. Choose **Two compartments** to enable V2 and Q. The concentration curve updates as you change them.
+2. Optionally load measured concentrations (a CSV with time in h and concentration in mg/L) and press **Fit** to estimate the PK parameters. With IV bolus dosing the absorption rate ka is not fitted.
 3. Tick **Effect** to add the effect curve. Optionally load measured effects (a CSV with time in h and effect), choose which parameters to fit and press **Fit effect**. Fit the PK first: the effect fit takes concentrations from the PK model currently in the form.
-4. **Use fitted effect values** copies the estimates back into the form.
+4. **Use fitted values** and **Use fitted effect values** copy the estimates back into the form.
+
+Tips for fitting a two-compartment model: IV bolus data with early, rapidly falling samples identify V, CL, V2 and Q best. Oral data alone make the fit harder and give apparent values (V/F, CL/F, V2/F, Q/F).
 
 ### Command line
 
@@ -76,7 +81,9 @@ ligentry redock --pdb 1HSG --seed 42 --out runs/redock_1hsg
 ligentry benchmark --seeds 42 7 123 2024 99 --out runs/benchmark   # about 11 minutes
 ```
 
-## Validation (docking)
+## Validation
+
+### Docking
 
 The benchmark redocks the crystal ligand of 8 diverse complexes with 5 seeds each. A run passes when the top-ranked pose is within 2 Å heavy-atom RMSD of the crystal pose, and a complex passes when most seeds do.
 
@@ -95,6 +102,18 @@ Overall: 5 of 8 complexes pass, and 27 of 40 individual runs (67.5%). For 7 of 8
 
 The measured baseline is in [`benchmarks/baseline_garuda.json`](benchmarks/baseline_garuda.json). Results are deterministic for a given environment and seed but not across RDKit versions, so compare multi-seed pass rates rather than single runs.
 
+### PK/PD
+
+The simulator is checked against analytic solutions rather than a benchmark data set:
+
+- IV bolus and oral two-compartment curves match the biexponential and three-exponential closed forms.
+- Dose = central + peripheral + eliminated amount (mass balance), and AUC equals dose/CL (times F for oral dosing).
+- Limiting cases: Q → 0 recovers the one-compartment model, and very fast distribution behaves as one compartment of volume V1 + V2.
+- Repeated doses obey superposition, and saturated Michaelis-Menten elimination removes Vmax mg/h from the whole body.
+- Fits recover known parameters from simulated data (to 0.1% without noise, within 25% with 3% noise on IV data).
+
+These tests show the maths is implemented correctly. They do not show that any parameter set describes a real drug.
+
 ## Limitations
 
 **Docking**
@@ -107,10 +126,11 @@ The measured baseline is in [`benchmarks/baseline_garuda.json`](benchmarks/basel
 
 **PK/PD**
 
-- The output is only as good as the parameters and data you supply. It is a modelling tool, not a prediction of how a drug behaves in people.
-- One compartment and direct effect only. A delayed effect shows up as a pattern in the effect residuals but is not modelled.
-- From oral data alone, bioavailability F and volume V cannot be separated: the fitted volume is V/F and the fitted clearance is CL/F.
+- The output is only as good as the parameters and data you supply. It is a modelling tool, not a prediction of how a drug behaves in people, and nothing here is dosing advice.
+- At most two compartments, oral or IV bolus dosing only (no infusions or other routes), and a direct effect only. A delayed effect shows up as a pattern in the effect residuals but is not modelled.
+- From oral data alone, bioavailability F and volume V cannot be separated: the fitted volumes are V/F and V2/F, and the fitted clearances are CL/F and Q/F.
 - Absorption and elimination can be swapped (flip-flop kinetics) when only oral data are fitted.
+- A two-compartment fit needs data that show both phases. When the distribution and terminal phases are close together, or early samples are missing, V2 and Q are poorly determined and the fit notes will say so.
 - EC50 and Emax trade off against each other when the measured concentrations never approach EC50, so the fit notes may warn about wide uncertainty.
 
 ## Project layout
@@ -136,11 +156,11 @@ Each wrapped docking tool is a plugin behind a common interface, so engines can 
 for t in scripts/test_*.py; echo $t; python $t | tail -2; end
 ```
 
-Each script ends with `ALL PASSED` (or a count of failures). The window code is not covered by automated tests yet.
+Each script ends with `ALL PASSED` or a count such as `81/81 checks passed`. The PK/PD scripts are `test_pkpd`, `test_twocomp`, `test_effect`, `test_observations`, `test_residuals`, `test_effect_residuals`, `test_pkpd_workflow` and `test_pkpd_window`. They need only NumPy and SciPy, apart from the window test, which also needs Qt.
 
 ## Roadmap
 
-- PK/PD: two-compartment model, delayed (effect-compartment) response, joint PK and PD fitting, SBML import.
+- PK/PD: delayed (effect-compartment) response, joint PK and PD fitting, infusions and other routes, SBML import.
 - Docking: OpenMM pose refinement and rescoring (aimed at the 1HSG and 1EVE ranking failures), a protonation step if it improves the full benchmark, command-line flags for stereoisomer options.
 - Protein-structure workflows.
 - Replace the Open Babel subprocess with a pure-Python route, and port to Windows.
