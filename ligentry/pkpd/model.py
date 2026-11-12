@@ -1,5 +1,5 @@
 """One- and two-compartment pharmacokinetics with oral or IV bolus dosing and a
-direct-effect PD model.
+sigmoid Emax PD model (direct, or delayed through an effect compartment).
 
 Units are fixed across the package: dose in mg, volume in L, clearance in L/h,
 rates in 1/h, time in h, concentration in mg/L.
@@ -25,9 +25,21 @@ Dosing route:
               concentration then jumps at a dose time, and the value reported at
               a dose time includes that dose.
 
-Effect (direct, no delay), a sigmoid Emax model of the plasma concentration:
+Effect, a sigmoid Emax model:
 
-    E = E0 + Emax * C**h / (EC50**h + C**h)
+    E = E0 + Emax * Ce**h / (EC50**h + Ce**h)
+
+By default the effect is direct: Ce is the plasma concentration C and there is no
+delay. Give a rate constant ke0 (1/h) to add an effect compartment instead. Ce is
+then the concentration at a hypothetical effect site that follows plasma with a
+lag:
+
+    dCe/dt = ke0 * (C - Ce)
+
+The effect compartment is driven by plasma concentration and takes up a negligible
+amount of drug, so it does not change the PK. A large ke0 gives back the direct
+effect; a small ke0 gives a long delay (the equilibration half-life is ln2/ke0), and
+the effect-versus-concentration curve then shows hysteresis.
 
 Use a negative Emax for an inhibitory effect.
 
@@ -101,10 +113,17 @@ class EffectParameters:
     emax: float = 1.0  # maximum change from baseline (negative for inhibition)
     ec50: float = 1.0  # concentration giving half of emax, mg/L
     hill: float = 1.0  # sigmoidicity
+    ke0: float | None = None  # effect-compartment rate constant, 1/h (None = direct effect)
 
     def __post_init__(self) -> None:
         if self.ec50 <= 0 or self.hill <= 0:
             raise ValueError("ec50 and hill must be positive")
+        if self.ke0 is not None and not self.ke0 > 0:
+            raise ValueError("ke0 must be positive (or None for a direct effect)")
+
+    @property
+    def delayed(self) -> bool:
+        return self.ke0 is not None
 
 
 @dataclass(frozen=True)
@@ -139,6 +158,7 @@ class Simulation:
     conc: np.ndarray  # plasma concentration, mg/L
     effect: np.ndarray | None  # None when no effect parameters were given
     peripheral: np.ndarray | None = None  # amount in peripheral compartment, mg (two-compartment)
+    effect_conc: np.ndarray | None = None  # effect-site concentration Ce, mg/L (effect compartment)
 
     def metrics(self) -> dict[str, float]:
         """Cmax, Tmax and AUC over the simulated window (trapezoid rule)."""
@@ -154,6 +174,13 @@ def effect_from_conc(conc: np.ndarray | float, eff: EffectParameters) -> np.ndar
     c = np.clip(np.asarray(conc, dtype=float), 0.0, None)
     ch = c**eff.hill
     return eff.e0 + eff.emax * ch / (eff.ec50**eff.hill + ch)
+
+
+def equilibration_half_life(ke0: float) -> float:
+    """Half-life (h) with which the effect site follows plasma, ln2/ke0."""
+    if not ke0 > 0:
+        raise ValueError("ke0 must be positive")
+    return math.log(2.0) / ke0
 
 
 def _elimination_clearance(params: PKParameters) -> float:
@@ -260,9 +287,22 @@ def simulate(
     iv = regimen.route == "iv_bolus"
     amount = regimen.dose if iv else params.bioavailability * regimen.dose
     target = 1 if iv else 0  # state that receives the dose
-    rhs = _rhs(params)
+    pk_rhs = _rhs(params)
+    n_pk = 3 if params.compartments == 2 else 2
+    ke0 = effect.ke0 if effect is not None else None
+    if ke0 is None:
+        rhs = pk_rhs
+        n_states = n_pk
+    else:
+        # one extra state: the effect-site concentration Ce (mg/L), driven by C = A_c / V
+        n_states = n_pk + 1
+        volume = params.volume
 
-    n_states = 3 if params.compartments == 2 else 2
+        def rhs(t, y):
+            d = pk_rhs(t, y[:n_pk])
+            d.append(ke0 * (max(y[1], 0.0) / volume - y[n_pk]))
+            return d
+
     y = np.zeros(n_states)
     out = np.zeros((n_states, ts.size))
     dose_set = set(float(d) for d in dose_times)
@@ -299,9 +339,21 @@ def simulate(
     inv[order] = np.arange(order.size)
     gut = out[0][inv]
     central = out[1][inv]
-    peripheral = out[2][inv] if n_states == 3 else None
+    peripheral = out[2][inv] if n_pk == 3 else None
     conc = central / params.volume
-    eff = effect_from_conc(conc, effect) if effect is not None else None
+    site = np.clip(out[n_pk][inv], 0.0, None) if ke0 is not None else None
+    eff = None
+    if effect is not None:
+        eff = effect_from_conc(site if site is not None else conc, effect)
     return Simulation(
-        t=times, gut=gut, central=central, conc=conc, effect=eff, peripheral=peripheral
+        t=times, gut=gut, central=central, conc=conc, effect=eff, peripheral=peripheral,
+        effect_conc=site,
     )
+
+
+def effect_site_concentration(
+    params: PKParameters, regimen: Regimen, times: np.ndarray, ke0: float
+) -> np.ndarray:
+    """Effect-site concentration Ce (mg/L) at `times` for an effect compartment with rate ke0."""
+    sim = simulate(params, regimen, times, EffectParameters(ke0=ke0))
+    return sim.effect_conc

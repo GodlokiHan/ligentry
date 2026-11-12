@@ -52,9 +52,10 @@ from ligentry.pkpd.observations import Observations, ObservationError, load_obse
 from ligentry.pkpd.residuals import Residuals, residuals_for
 
 _INTRO = (
-    "One- or two-compartment model with oral or IV bolus dosing and a direct Emax "
-    "effect. It is a teaching and exploration tool: results are only as good as the "
-    "parameters you enter, and nothing here is dosing advice."
+    "One- or two-compartment model with oral or IV bolus dosing and an Emax effect, "
+    "direct or delayed through an effect compartment. It is a teaching and exploration "
+    "tool: results are only as good as the parameters you enter, and nothing here is "
+    "dosing advice."
 )
 _PARAMETER_BOXES = (  # fit checkbox label, parameter name
     ("ka", "ka"),
@@ -153,6 +154,16 @@ class PKPDWindow(QMainWindow):
             "ec50": self.ec50_spin,
             "hill": self.hill_spin,
         }
+        self.delayed_check = QCheckBox("Delayed effect (effect compartment)")
+        self.delayed_check.setToolTip(
+            "The effect follows an effect-site concentration that chases the plasma "
+            "concentration with rate constant ke0, instead of following plasma directly. "
+            "Use it when the effect lags behind the concentration."
+        )
+        self.ke0_spin = self._spin(d.ke0, 0.001, 100.0, 4, " 1/h")
+        self.ke0_spin.setToolTip("Effect-site rate constant ke0. The equilibration half-life is ln2/ke0.")
+        self.ke0_spin.setEnabled(False)
+        self.delayed_check.toggled.connect(self._delayed_changed)
         self.effect_box = QGroupBox("Effect (direct Emax model)")
         self.effect_box.setCheckable(True)
         self.effect_box.setChecked(False)
@@ -162,6 +173,8 @@ class PKPDWindow(QMainWindow):
         form.addRow("Emax (negative = inhibition)", self.emax_spin)
         form.addRow("EC50", self.ec50_spin)
         form.addRow("Hill coefficient", self.hill_spin)
+        form.addRow(self.delayed_check)
+        form.addRow("Effect-site rate ke0", self.ke0_spin)
 
         # ---- time window -----------------------------------------------------------------
         self.auto_time = QCheckBox("Choose the time window automatically")
@@ -255,6 +268,14 @@ class PKPDWindow(QMainWindow):
             box.setChecked(ticked)
             self.eff_free_boxes[name] = box
             eff_free_row.addWidget(box)
+        self.eff_ke0_box = QCheckBox("ke0")
+        self.eff_ke0_box.setChecked(False)
+        self.eff_ke0_box.setToolTip(
+            "Also fit the effect-site rate constant ke0 (a delayed effect). Unless you tick "
+            "\"Start from the values above\", ke0 starts from a scan over many values. "
+            "Using the fit then switches the delayed effect on."
+        )
+        eff_free_row.addWidget(self.eff_ke0_box)
         self.eff_form_start = QCheckBox("Start from the values above (not guessed from the data)")
         self.eff_form_start.setToolTip(
             "By default the fitted parameters start from values guessed from the data and "
@@ -369,6 +390,13 @@ class PKPDWindow(QMainWindow):
         self.free_boxes["intercompartmental_clearance"].setEnabled(two)
         self.schedule_update()
 
+    def _delayed_changed(self, checked: bool) -> None:
+        self.ke0_spin.setEnabled(checked)
+        self.effect_box.setTitle(
+            "Effect (Emax model, effect compartment)" if checked else "Effect (direct Emax model)"
+        )
+        self.schedule_update()
+
     def _auto_time_changed(self, checked: bool) -> None:
         self.tend_spin.setEnabled(not checked)
         self.schedule_update()
@@ -395,6 +423,8 @@ class PKPDWindow(QMainWindow):
             compartments=self.comp_combo.currentData(),
             peripheral_volume=self.volume2_spin.value(),
             intercompartmental_clearance=self.q_spin.value(),
+            delayed_effect=self.delayed_check.isChecked(),
+            ke0=self.ke0_spin.value(),
         )
 
     def set_inputs(self, inputs: workflow.ModelInputs) -> None:
@@ -417,6 +447,8 @@ class PKPDWindow(QMainWindow):
         self.comp_combo.setCurrentIndex(max(self.comp_combo.findData(inputs.compartments), 0))
         self.volume2_spin.setValue(inputs.peripheral_volume)
         self.q_spin.setValue(inputs.intercompartmental_clearance)
+        self.ke0_spin.setValue(inputs.ke0)
+        self.delayed_check.setChecked(inputs.delayed_effect)
         self.schedule_update()
 
     # ---- simulate and draw ---------------------------------------------------------------
@@ -465,6 +497,9 @@ class PKPDWindow(QMainWindow):
             f"AUC(0-{result.t_end:g} h) {m['auc']:.4g} mg*h/L\n"
             f"{workflow.half_life_text(result.pk)}"
         )
+        delay_text = workflow.effect_half_life_text(result.effect)
+        if delay_text:
+            text += "\n" + delay_text
         if resid is not None:
             text += f"\nAgainst the concentration data: RMSE {resid.rmse:.4g} mg/L ({len(resid)} points)"
         if eresid is not None:
@@ -498,6 +533,8 @@ class PKPDWindow(QMainWindow):
 
         ax_c = ax["conc"]
         ax_c.plot(sim.t, sim.conc, color="#1f77b4", lw=1.8, label="model")
+        if sim.effect_conc is not None:
+            ax_c.plot(sim.t, sim.effect_conc, color="#2ca02c", lw=1.4, ls="--", label="effect site")
         if result.regimen.n_doses <= 40:
             for t in result.regimen.dose_times():
                 ax_c.axvline(t, color="gray", lw=0.7, ls=":")
@@ -662,6 +699,8 @@ class PKPDWindow(QMainWindow):
         if self.eff_obs is None:
             return
         free = [n for n, box in self.eff_free_boxes.items() if box.isChecked()]
+        if self.eff_ke0_box.isChecked():
+            free.append("ke0")
         if not free:
             QMessageBox.information(self, "ligentry", "Tick at least one effect parameter to fit.")
             return
@@ -699,7 +738,10 @@ class PKPDWindow(QMainWindow):
         # the boxes have fixed ranges and decimals: say so if a fitted value did not fit in them
         shown = self.gather_inputs()
         clipped = []
-        for name, spin in self._effect_spins.items():
+        spins = dict(self._effect_spins)
+        if fitted.ke0 is not None:
+            spins["ke0"] = self.ke0_spin
+        for name, spin in spins.items():
             want, got = getattr(fitted, name), getattr(shown, name)
             tolerance = 0.5 * 10.0 ** (-spin.decimals()) + 1e-3 * abs(want)
             if abs(want - got) > tolerance:

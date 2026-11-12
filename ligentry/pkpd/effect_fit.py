@@ -1,27 +1,39 @@
 """Fit the sigmoid Emax effect model to measured effects (no Qt).
 
-The model is the direct-effect relationship from ligentry.pkpd.model:
+The model is the effect relationship from ligentry.pkpd.model:
 
-    E = E0 + Emax * C**h / (EC50**h + C**h)
+    E = E0 + Emax * Ce**h / (EC50**h + Ce**h)
 
-`fit_effect` works on pairs of (plasma concentration, measured effect). The
+Ce is the plasma concentration for a direct effect. With an effect compartment
+(ke0 given) Ce is the effect-site concentration, which follows plasma with a lag:
+
+    dCe/dt = ke0 * (C - Ce)
+
+`fit_effect` works on pairs of (plasma concentration, measured effect). The plasma
 concentration at each measurement time normally comes from the PK model, see
-ligentry.pkpd.effect_workflow.
+ligentry.pkpd.effect_workflow. A delayed effect also needs `site`, a function that
+returns the effect-site concentration at the measurement times for a given ke0
+(the PK model is run again for every ke0 the optimiser tries).
 
-EC50 and the Hill slope are fitted on a log scale (always positive); E0 and Emax
-are fitted as they are, so Emax can be negative for an inhibitory effect. EC50
-and the Hill slope get default limits so that poorly informative data cannot
-send them to absurd values:
+EC50, the Hill slope and ke0 are fitted on a log scale (always positive); E0 and
+Emax are fitted as they are, so Emax can be negative for an inhibitory effect.
+EC50, the Hill slope and ke0 get default limits so that poorly informative data
+cannot send them to absurd values:
 
     EC50 between 1e-3 x the lowest non-zero concentration and 1e3 x the highest
     Hill slope between 0.1 and 10
+    ke0 between 0.001 and 100 per hour (equilibration half-life 0.007 h to 693 h)
+
+When ke0 is fitted without a starting value, a coarse scan over ke0 picks the
+starting point, because the error surface of a delayed effect has local minima.
 
 `se` holds standard errors in each parameter's own unit. `cv_percent` expresses them
-relative to the estimate, which is only meaningful for EC50 and the Hill slope: a
-baseline or Emax near zero gives an enormous, meaningless CV.
+relative to the estimate, which is only meaningful for EC50, the Hill slope and ke0:
+a baseline or Emax near zero gives an enormous, meaningless CV.
 
 A parameter that finishes on a limit is reported in `at_bound`: treat it as
-"the data cannot pin this down", not as a measurement.
+"the data cannot pin this down", not as a measurement. A ke0 on its upper limit
+means the data show no detectable delay.
 
 If the measured concentrations never get near EC50, Emax and EC50 trade off
 against each other and their uncertainties are large. The fit will still return
@@ -30,20 +42,23 @@ numbers, so read the CV% and the notes before trusting them.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from typing import Callable
 
 import numpy as np
 from scipy.optimize import least_squares
 
 from ligentry.pkpd.model import EffectParameters
 
-EFFECT_FITTABLE = ("e0", "emax", "ec50", "hill")
-_LOG_PARAMS = ("ec50", "hill")
+EFFECT_FITTABLE = ("e0", "emax", "ec50", "hill", "ke0")
+_LOG_PARAMS = ("ec50", "hill", "ke0")
 DEFAULT_HILL_BOUNDS = (0.1, 10.0)
+DEFAULT_KE0_BOUNDS = (1e-3, 100.0)
+_KE0_SCAN = np.geomspace(0.01, 30.0, 12)
 
 
 @dataclass
 class EffectFitResult:
-    effect: EffectParameters  # fitted values for all four parameters
+    effect: EffectParameters  # fitted values for all parameters (ke0 is None for a direct effect)
     start: EffectParameters  # values the optimiser started from
     free: tuple[str, ...]
     estimates: dict[str, float]
@@ -76,6 +91,44 @@ def guess_effect_start(conc: np.ndarray, effect: np.ndarray) -> EffectParameters
     return EffectParameters(e0=low, emax=1.5 * change, ec50=ec50, hill=1.0)
 
 
+def _predict(values: dict[str, float], conc: np.ndarray) -> np.ndarray:
+    ch = conc ** values["hill"]
+    return values["e0"] + values["emax"] * ch / (values["ec50"] ** values["hill"] + ch)
+
+
+def _scan_ke0(
+    effect: np.ndarray,
+    base: EffectParameters,
+    others: tuple[str, ...],
+    bounds: dict[str, tuple[float, float]] | None,
+    site: Callable[[float], np.ndarray],
+    ke0_limits: tuple[float, float],
+) -> tuple[float, EffectParameters | None]:
+    """Try a grid of ke0 values and return the best one with the other parameters fitted for it."""
+    best_k, best_fit, best_rmse = None, None, np.inf
+    for k in _KE0_SCAN:
+        if not ke0_limits[0] <= k <= ke0_limits[1]:
+            continue
+        ce = site(float(k))
+        if not np.all(np.isfinite(ce)) or float(ce.max()) <= 0.0:
+            continue
+        try:
+            if others:
+                fit = fit_effect(ce, effect, start=replace(base, ke0=None), free=others, bounds=bounds)
+                rmse, params = fit.rmse, fit.effect
+            else:
+                params = replace(base, ke0=None)
+                values = {n: float(getattr(params, n)) for n in ("e0", "emax", "ec50", "hill")}
+                rmse = float(np.sqrt(np.mean((_predict(values, ce) - effect) ** 2)))
+        except ValueError:
+            continue
+        if rmse < best_rmse:
+            best_k, best_fit, best_rmse = float(k), params, rmse
+    if best_k is None:
+        return float(np.sqrt(ke0_limits[0] * ke0_limits[1])), None
+    return best_k, best_fit
+
+
 def fit_effect(
     conc: np.ndarray,
     effect: np.ndarray,
@@ -83,7 +136,14 @@ def fit_effect(
     free: tuple[str, ...] | list[str] = ("e0", "emax", "ec50"),
     bounds: dict[str, tuple[float, float]] | None = None,
     max_nfev: int = 400,
+    site: Callable[[float], np.ndarray] | None = None,
 ) -> EffectFitResult:
+    """Fit the chosen effect parameters.
+
+    `conc` is the plasma concentration at each measurement. For a delayed effect (ke0
+    free, or `start.ke0` given) `site(ke0)` must return the effect-site concentration
+    at the same times.
+    """
     conc = np.asarray(conc, dtype=float)
     effect = np.asarray(effect, dtype=float)
     free = tuple(free)
@@ -113,11 +173,19 @@ def fit_effect(
     if start is None:
         start = guess_effect_start(conc, effect)
 
+    delayed = "ke0" in free or start.ke0 is not None
+    if delayed and site is None:
+        raise ValueError(
+            "A delayed effect needs the PK model to give the effect-site concentration "
+            "(the 'site' function)."
+        )
+
     limits: dict[str, tuple[float, float]] = {
         "e0": (-np.inf, np.inf),
         "emax": (-np.inf, np.inf),
         "ec50": (1e-3 * c_lo, 1e3 * c_max),
         "hill": DEFAULT_HILL_BOUNDS,
+        "ke0": DEFAULT_KE0_BOUNDS,
     }
     for name, (lo, hi) in (bounds or {}).items():
         if name in free:
@@ -126,6 +194,12 @@ def fit_effect(
             if name in _LOG_PARAMS and lo <= 0:
                 raise ValueError(f"bounds for {name} must be positive")
             limits[name] = (float(lo), float(hi))
+
+    if "ke0" in free and start.ke0 is None:
+        # no starting value: let a coarse scan choose it (the error surface has local minima)
+        others = tuple(n for n in free if n != "ke0")
+        k0, best = _scan_ke0(effect, start, others, bounds, site, limits["ke0"])
+        start = replace(best if best is not None else start, ke0=k0)
 
     def to_x(name: str, value: float) -> float:
         return float(np.log(value)) if name in _LOG_PARAMS else float(value)
@@ -136,7 +210,12 @@ def fit_effect(
     pad = 1e-9 * np.maximum(1.0, np.abs(x0))
     x0 = np.clip(x0, lower + pad, upper - pad)
 
-    fixed = {n: float(getattr(start, n)) for n in EFFECT_FITTABLE if n not in free}
+    fixed = {
+        n: float(getattr(start, n))
+        for n in EFFECT_FITTABLE
+        if n not in free and getattr(start, n) is not None
+    }
+    fixed_drive = site(fixed["ke0"]) if "ke0" in fixed else None  # ke0 held at a known value
 
     def native(x: np.ndarray) -> dict[str, float]:
         values = dict(fixed)
@@ -144,19 +223,25 @@ def fit_effect(
             values[n] = float(np.exp(v)) if n in _LOG_PARAMS else float(v)
         return values
 
+    def drive(values: dict[str, float]) -> np.ndarray:
+        if "ke0" not in values:
+            return conc
+        return site(values["ke0"]) if "ke0" in free else fixed_drive
+
     def predict(values: dict[str, float]) -> np.ndarray:
-        ch = conc ** values["hill"]
-        return values["e0"] + values["emax"] * ch / (values["ec50"] ** values["hill"] + ch)
+        return _predict(values, drive(values))
 
     def residuals(x: np.ndarray) -> np.ndarray:
         return predict(native(x)) - effect
 
+    kwargs = {"diff_step": 1e-6} if delayed else {}  # ODE noise swamps the default tiny step
     sol = least_squares(
-        residuals, x0, bounds=(lower, upper), max_nfev=max_nfev, x_scale="jac"
+        residuals, x0, bounds=(lower, upper), max_nfev=max_nfev, x_scale="jac", **kwargs
     )
     values = native(sol.x)
     fitted = EffectParameters(
-        e0=values["e0"], emax=values["emax"], ec50=values["ec50"], hill=values["hill"]
+        e0=values["e0"], emax=values["emax"], ec50=values["ec50"], hill=values["hill"],
+        ke0=values.get("ke0"),
     )
     rmse = float(np.sqrt(np.mean((predict(values) - effect) ** 2)))
 

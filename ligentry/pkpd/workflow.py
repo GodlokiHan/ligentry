@@ -19,6 +19,7 @@ from ligentry.pkpd.model import (
     PKParameters,
     Regimen,
     Simulation,
+    equilibration_half_life,
     half_lives,
     hybrid_rate_constants,
     simulate,
@@ -75,6 +76,10 @@ class ModelInputs:
     compartments: int = 1
     peripheral_volume: float = 60.0
     intercompartmental_clearance: float = 8.0
+    # effect compartment: with delayed_effect the effect follows an effect-site
+    # concentration that lags plasma with rate constant ke0 (1/h)
+    delayed_effect: bool = False
+    ke0: float = 0.5
 
 
 @dataclass
@@ -144,7 +149,8 @@ def build_model(
     )
     effect = (
         EffectParameters(
-            e0=inputs.e0, emax=inputs.emax, ec50=inputs.ec50, hill=inputs.hill
+            e0=inputs.e0, emax=inputs.emax, ec50=inputs.ec50, hill=inputs.hill,
+            ke0=inputs.ke0 if inputs.delayed_effect else None,
         )
         if inputs.use_effect
         else None
@@ -196,6 +202,13 @@ def half_life_text(pk: PKParameters) -> str:
         f"Half-lives: distribution {lives['distribution']:.3g} h, "
         f"terminal {lives['terminal']:.3g} h{tail}"
     )
+
+
+def effect_half_life_text(effect: EffectParameters | None) -> str:
+    """One line about the effect-site delay, or an empty string for a direct effect."""
+    if effect is None or effect.ke0 is None:
+        return ""
+    return f"Effect-site equilibration half-life {equilibration_half_life(effect.ke0):.3g} h (ke0 {effect.ke0:.3g} 1/h)"
 
 
 def simulate_inputs(
@@ -325,6 +338,8 @@ def simulation_to_csv(path: str | Path, res: SimulationResult) -> Path:
     header = ["time_h", "conc_mg_per_L", "gut_mg", "central_mg"]
     if sim.peripheral is not None:
         header.append("peripheral_mg")
+    if sim.effect_conc is not None:
+        header.append("effect_site_mg_per_L")
     if sim.effect is not None:
         header.append("effect")
     with open(path, "w", newline="") as fh:
@@ -334,6 +349,8 @@ def simulation_to_csv(path: str | Path, res: SimulationResult) -> Path:
             row = [sim.t[i], sim.conc[i], sim.gut[i], sim.central[i]]
             if sim.peripheral is not None:
                 row.append(sim.peripheral[i])
+            if sim.effect_conc is not None:
+                row.append(sim.effect_conc[i])
             if sim.effect is not None:
                 row.append(sim.effect[i])
             writer.writerow([f"{v:.8g}" for v in row])

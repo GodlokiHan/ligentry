@@ -5,10 +5,11 @@ use. The predicted effect comes from the form's PK model (which gives the
 concentration at each effect time) and the form's effect parameters, whether or
 not the effect box is ticked.
 
-The model is a direct effect with no delay. A good fit scatters around zero; a
-systematic curve (for example residuals that are positive on the way up and
-negative on the way down) points to a delayed effect that this model cannot
-describe.
+By default the model is a direct effect with no delay. A good fit scatters around
+zero; a systematic curve (for example residuals that are positive on the way up and
+negative on the way down) points to a delayed effect. Switch on the form's delayed
+(effect-compartment) option to model it, and the residuals are then taken against
+the effect-site concentration.
 
 The result is the same `Residuals` container used for concentrations: its fields
 are just times, observed and predicted values, so the unit is the caller's.
