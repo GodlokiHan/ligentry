@@ -23,10 +23,10 @@ Docking uses [AutoDock Vina](https://github.com/ccsb-scripps/AutoDock-Vina). Lig
 - Oral or intravenous (IV) bolus dosing, single or repeated doses.
 - Linear (clearance) or Michaelis-Menten elimination, with either number of compartments.
 - Half-lives reported for the current parameters: terminal and distribution half-life for two compartments, terminal only for one.
-- Direct sigmoid Emax effect model (a negative Emax models inhibition).
-- Load measured concentration data and fit the PK parameters, including V2 and Q, with standard errors, residuals and RMSE shown beside the plot. Fit notes point out weak spots such as phases that are not well separated, flip-flop kinetics, and apparent (V/F, CL/F) values after oral dosing.
-- Load measured effect data and fit E0, Emax, EC50 and (optionally) the Hill coefficient, using the concentrations predicted by the PK model. Effect residuals are plotted too: a smooth up-then-down pattern suggests a delayed effect that this model cannot capture.
-- Export the simulation as CSV (time, concentration, gut, central and, for two compartments, peripheral amounts, plus the effect when it is switched on).
+- Sigmoid Emax effect model (a negative Emax models inhibition), either **direct** (the effect follows the plasma concentration at once) or **delayed** through an effect compartment: the effect follows a hypothetical effect-site concentration Ce that lags plasma, dCe/dt = ke0 (C - Ce). The delay is described by ke0 (1/h) and its equilibration half-life ln2/ke0, which is shown with the results.
+- Load measured effect data and fit E0, Emax, EC50, optionally the Hill coefficient and ke0 (tick **ke0** to fit a delayed effect), using the concentrations predicted by the PK model. Because the error surface of a delayed effect has local minima, ke0 is started from a coarse scan unless you ask the fit to start from the values in the form. Effect residuals are plotted too: with a direct model, a smooth up-then-down pattern suggests a delayed effect, so switch to the delayed model and fit ke0.
+- Load measured effect data and fit E0, Emax, EC50, optionally the Hill coefficient and, for a delayed effect, ke0, using the concentrations predicted by the PK model. Because the error surface of a delayed effect has local minima, ke0 is started from a coarse scan unless you give it a starting value. Effect residuals are plotted too: with a direct model, a smooth up-then-down pattern suggests a delayed effect, so switch to the delayed model and fit ke0.
+- Export the simulation as CSV (time, concentration, gut, central and, for two compartments, peripheral amounts, plus the effect-site concentration for a delayed effect and the effect when it is switched on).
 
 Units throughout: dose in mg, volume in L, clearance in L/h, rate constants in 1/h, time in h, concentration in mg/L.
 
@@ -67,10 +67,12 @@ python -m ligentry.gui.pkpd_window
 
 1. Choose the route (oral or IV bolus), then set the dose, regimen and PK parameters. Choose **Two compartments** to enable V2 and Q. The concentration curve updates as you change them.
 2. Optionally load measured concentrations (a CSV with time in h and concentration in mg/L) and press **Fit** to estimate the PK parameters. With IV bolus dosing the absorption rate ka is not fitted.
-3. Tick **Effect** to add the effect curve. Optionally load measured effects (a CSV with time in h and effect), choose which parameters to fit and press **Fit effect**. Fit the PK first: the effect fit takes concentrations from the PK model currently in the form.
-4. **Use fitted values** and **Use fitted effect values** copy the estimates back into the form.
+3. Tick **Effect** to add the effect curve. To model a lag between concentration and effect, tick **Delayed effect (effect compartment)** in the same box and set the effect-site rate ke0; the effect-site concentration is then drawn as a dashed curve on the concentration plot. Optionally load measured effects (a CSV with time in h and effect), choose which parameters to fit (tick **ke0** to fit a delayed effect; it is off by default) and press **Fit effect**. Fit the PK first: the effect fit takes concentrations from the PK model currently in the form.
+4. **Use fitted values** and **Use fitted effect values** copy the estimates back into the form. Applying a fit that includes ke0 also switches the delayed effect on.
 
 Tips for fitting a two-compartment model: IV bolus data with early, rapidly falling samples identify V, CL, V2 and Q best. Oral data alone make the fit harder and give apparent values (V/F, CL/F, V2/F, Q/F).
+
+Tips for fitting a delayed effect: measure the effect densely around and after the concentration peak, where the lag is visible. Compare the residuals of the direct and delayed models before trusting a fitted ke0.
 
 ### Command line
 
@@ -110,7 +112,8 @@ The simulator is checked against analytic solutions rather than a benchmark data
 - Dose = central + peripheral + eliminated amount (mass balance), and AUC equals dose/CL (times F for oral dosing).
 - Limiting cases: Q → 0 recovers the one-compartment model, and very fast distribution behaves as one compartment of volume V1 + V2.
 - Repeated doses obey superposition, and saturated Michaelis-Menten elimination removes Vmax mg/h from the whole body.
-- Fits recover known parameters from simulated data (to 0.1% without noise, within 25% with 3% noise on IV data).
+- The effect-site concentration matches its closed form after an IV bolus (including the limit where ke0 equals the elimination rate), its AUC equals the plasma AUC, a very large ke0 recovers the direct effect, and a delayed effect shows hysteresis: the same plasma concentration gives different effects on the way up and down.
+- Fits recover known parameters from simulated data (to 0.1% without noise, within 25% with 3% noise on IV data). A delayed-effect fit recovers ke0, E0, Emax and EC50 from several different starting values for ke0, and data from a direct effect push ke0 to its upper limit, which the fit notes report as no detectable delay.
 
 These tests show the maths is implemented correctly. They do not show that any parameter set describes a real drug.
 
@@ -127,11 +130,12 @@ These tests show the maths is implemented correctly. They do not show that any p
 **PK/PD**
 
 - The output is only as good as the parameters and data you supply. It is a modelling tool, not a prediction of how a drug behaves in people, and nothing here is dosing advice.
-- At most two compartments, oral or IV bolus dosing only (no infusions or other routes), and a direct effect only. A delayed effect shows up as a pattern in the effect residuals but is not modelled.
+- At most two compartments, oral or IV bolus dosing only (no infusions or other routes), and the effect is either direct or a single effect compartment. Other delay models (for example indirect-response models or tolerance) are not available.
 - From oral data alone, bioavailability F and volume V cannot be separated: the fitted volumes are V/F and V2/F, and the fitted clearances are CL/F and Q/F.
 - Absorption and elimination can be swapped (flip-flop kinetics) when only oral data are fitted.
 - A two-compartment fit needs data that show both phases. When the distribution and terminal phases are close together, or early samples are missing, V2 and Q are poorly determined and the fit notes will say so.
 - EC50 and Emax trade off against each other when the measured concentrations never approach EC50, so the fit notes may warn about wide uncertainty.
+- ke0 and EC50 are only as reliable as the PK model that supplies the plasma concentrations: a wrong PK model can look like a delay. With sparse effect data ke0 is poorly determined, and a ke0 that finishes on its limits (0.001 or 100 per hour) is a sign the data cannot determine it.
 
 ## Project layout
 
@@ -156,11 +160,11 @@ Each wrapped docking tool is a plugin behind a common interface, so engines can 
 for t in scripts/test_*.py; echo $t; python $t | tail -2; end
 ```
 
-Each script ends with `ALL PASSED` or a count such as `81/81 checks passed`. The PK/PD scripts are `test_pkpd`, `test_twocomp`, `test_effect`, `test_observations`, `test_residuals`, `test_effect_residuals`, `test_pkpd_workflow` and `test_pkpd_window`. They need only NumPy and SciPy, apart from the window test, which also needs Qt.
+Each script ends with `ALL PASSED` or a count such as `81/81 checks passed`. The PK/PD scripts are `test_pkpd`, `test_twocomp`, `test_effect`, `test_effect_compartment`, `test_observations`, `test_residuals`, `test_effect_residuals`, `test_pkpd_workflow`, `test_pkpd_window` and `test_pkpd_window_delayed`. They need only NumPy and SciPy, apart from the two window tests, which also need Qt.
 
 ## Roadmap
 
-- PK/PD: delayed (effect-compartment) response, joint PK and PD fitting, infusions and other routes, SBML import.
+- PK/PD: joint PK and PD fitting, infusions and other routes, SBML import.
 - Docking: OpenMM pose refinement and rescoring (aimed at the 1HSG and 1EVE ranking failures), a protonation step if it improves the full benchmark, command-line flags for stereoisomer options.
 - Protein-structure workflows.
 - Replace the Open Babel subprocess with a pure-Python route, and port to Windows.
