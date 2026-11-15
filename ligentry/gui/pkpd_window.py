@@ -45,6 +45,7 @@ from PySide6.QtWidgets import (
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
 
+from ligentry.gui import help_menu
 from ligentry.pkpd import effect_workflow, workflow
 from ligentry.pkpd.effect_data import EffectObservations, load_effect_observations
 from ligentry.pkpd.effect_residuals import effect_residuals_for
@@ -349,6 +350,9 @@ class PKPDWindow(QMainWindow):
         self._timer.setSingleShot(True)
         self._timer.setInterval(120)
         self._timer.timeout.connect(self.update_plot)
+
+        self.menuBar().setNativeMenuBar(False)  # keep the menu inside the window
+        help_menu.add_help_menu(self, "pkpd-overview")  # F1 opens the PK/PD manual page
 
         self._structure_changed()
         self.update_plot()
@@ -771,6 +775,7 @@ class PKPDWindow(QMainWindow):
 
 
 def main() -> int:
+    help_menu.prepare_application()
     app = QApplication.instance() or QApplication(sys.argv)
     window = PKPDWindow()
     window.show()

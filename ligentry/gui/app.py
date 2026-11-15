@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QToolBar, QVBoxLayout, QWidget,
 )
 
-from ligentry.gui import runio
+from ligentry.gui import help_menu, runio
 from ligentry.gui.viewer import MolViewer
 
 _PROGRESS_RE = re.compile(r"\[(\d+)/(\d+)\]")  # "[3/20] name" from the docking log
@@ -236,7 +236,6 @@ class MainWindow(QMainWindow):
         self.act_reset_view = self._action(
             "Reset 3D view", self.show_selected, None, S.SP_BrowserReload,
             "Re-centre the 3D view on the selected ligand")
-        self.act_about = self._action("About ligentry", self.about)
         self.act_pkpd = self._action(
             "PK/PD simulator...", self.open_pkpd, "Ctrl+Shift+P", S.SP_ComputerIcon,
             "Open the pharmacokinetics / pharmacodynamics simulator")
@@ -274,8 +273,7 @@ class MainWindow(QMainWindow):
         tools_menu = menubar.addMenu("&Tools")
         tools_menu.addAction(self.act_pkpd)
 
-        help_menu = menubar.addMenu("&Help")
-        help_menu.addAction(self.act_about)
+        help_menu.add_help_menu(self, "docking-overview", about=self.about)
 
         bar = QToolBar("Main toolbar", self)
         bar.setMovable(False)
@@ -292,6 +290,8 @@ class MainWindow(QMainWindow):
         bar.addAction(self.act_reset_view)
         bar.addSeparator()
         bar.addAction(self.act_pkpd)
+        bar.addSeparator()
+        bar.addAction(self.act_help)
         self.addToolBar(bar)
 
     def open_pkpd(self) -> None:
@@ -581,6 +581,7 @@ class MainWindow(QMainWindow):
         if not self.maybe_save():
             event.ignore()
             return
+        help_menu.close_help()
         event.accept()
 
     # ---- run control ------------------------------------------------------
@@ -796,7 +797,9 @@ class MainWindow(QMainWindow):
 
 
 def main() -> int:
+    help_menu.prepare_application()  # before QApplication: the Help window's web browser needs it
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()
+    help_menu.schedule_guide(window)  # first launch only
     return app.exec()
