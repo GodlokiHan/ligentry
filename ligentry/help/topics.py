@@ -915,7 +915,7 @@ The manual still works. If PySide6 was installed without its web engine componen
 environment with <code>python -m pip install PySide6-Addons</code> (same version as PySide6: check with <code>python -m pip show PySide6</code>).</li>
 <li><b>The Web tab is blank or closes.</b> Start ligentry with <code>QTWEBENGINE_CHROMIUM_FLAGS=&quot;--disable-gpu&quot; ligentry-gui</code>, or with
 <code>QTWEBENGINE_DISABLE_SANDBOX=1</code> as a last resort.</li>
-<li><b>A site will not load.</b> You may be offline, or the site may block embedded browsers. Use <b>Open in browser</b>.</li>
+<li><b>A site will not load.</b> You may be offline, or the site may be refusing your network. Some sites (Google, for example) answer &quot;unusual traffic&quot; on certain networks. Try <b>Open in browser</b>, or use another source such as PubMed or Europe PMC.</li>
 </ul>
 """.replace("@T@", _TABLE),
     ),
@@ -948,7 +948,7 @@ own license, so check them before redistributing a bundled copy.</p>
 <p>Type in the box at the top, choose <b>where to search</b> in the list beside it, and press Enter:</p>
 <ul>
 <li><b>This manual</b> searches every page here and shows the best matches.</li>
-<li><b>PubMed, Europe PMC, PubMed Central, Google Scholar</b> search research papers.</li>
+<li><b>PubMed, Europe PMC, PubMed Central</b> search research papers.</li>
 <li><b>ClinicalTrials.gov, DailyMed, MedlinePlus</b> cover trials, drug labels and health information.</li>
 <li><b>PubChem, ChEMBL, UniProt, RCSB PDB</b> cover molecules, targets and structures.</li>
 <li><b>Wikipedia, YouTube, Web search</b> give overviews, explanatory videos and general results.</li>
@@ -984,7 +984,6 @@ public http and https pages open; local files and addresses on your own network 
 <li><a href="https://pubmed.ncbi.nlm.nih.gov/">PubMed</a>: citations and abstracts of biomedical papers. Free to search.</li>
 <li><a href="https://europepmc.org/">Europe PMC</a>: papers with free full text where available, and preprints.</li>
 <li><a href="https://pmc.ncbi.nlm.nih.gov/">PubMed Central</a>: free full-text archive.</li>
-<li><a href="https://scholar.google.com/">Google Scholar</a>: broad scholarly search.</li>
 </ul>
 <h3>Drugs, trials and health information</h3>
 <ul>

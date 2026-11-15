@@ -50,9 +50,6 @@ SOURCES: tuple[Source, ...] = (
     Source("pmc", "PubMed Central", "papers",
            "Free full-text archive of biomedical papers.",
            "https://pmc.ncbi.nlm.nih.gov/search/?term={q}"),
-    Source("scholar", "Google Scholar", "papers",
-           "Broad search over scholarly literature, including books and theses.",
-           "https://scholar.google.com/scholar?q={q}"),
     Source("clinicaltrials", "ClinicalTrials.gov", "clinical",
            "Registry of clinical studies and their results.",
            "https://clinicaltrials.gov/search?term={q}"),
@@ -89,7 +86,7 @@ _BY_KEY = {s.key: s for s in SOURCES}
 DEFAULT_SOURCE = "web"
 
 # The sources offered next to a manual page's "look it up" links, in this order.
-QUICK_SOURCES = ("pubmed", "europepmc", "scholar", "wikipedia", "youtube")
+QUICK_SOURCES = ("pubmed", "europepmc", "wikipedia", "youtube", "web")
 
 
 def get_source(key: str) -> Source:

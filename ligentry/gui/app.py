@@ -799,6 +799,7 @@ class MainWindow(QMainWindow):
 def main() -> int:
     help_menu.prepare_application()  # before QApplication: the Help window's web browser needs it
     app = QApplication(sys.argv)
+    help_menu.connect_shutdown(app)
     window = MainWindow()
     window.show()
     help_menu.schedule_guide(window)  # first launch only

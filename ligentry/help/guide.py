@@ -56,7 +56,7 @@ GUIDE_PAGES: tuple[GuidePage, ...] = (
     GuidePage(
         "Help and research",
         "<p>Press <b>F1</b> anywhere, or use the <b>Help</b> menu, to open the manual at the right page.</p>"
-        "<ul><li>The search box searches the manual, or PubMed, Europe PMC, Google Scholar, ClinicalTrials.gov, "
+        "<ul><li>The search box searches the manual, or PubMed, Europe PMC, PubMed Central, ClinicalTrials.gov, "
         "DailyMed, PubChem, ChEMBL, UniProt, RCSB PDB, Wikipedia, YouTube and the web.</li>"
         "<li>You can type a DOI, a PubMed ID or a web address and go straight there.</li>"
         "<li>Nothing goes online unless you ask it to.</li></ul>"

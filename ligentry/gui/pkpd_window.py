@@ -777,6 +777,7 @@ class PKPDWindow(QMainWindow):
 def main() -> int:
     help_menu.prepare_application()
     app = QApplication.instance() or QApplication(sys.argv)
+    help_menu.connect_shutdown(app)
     window = PKPDWindow()
     window.show()
     return app.exec()

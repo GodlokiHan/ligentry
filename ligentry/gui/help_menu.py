@@ -17,6 +17,11 @@ _help_window = None
 _guide_dialog = None
 
 
+def connect_shutdown(app) -> None:
+    """Call once after creating the QApplication."""
+    app.aboutToQuit.connect(shutdown)
+
+
 def prepare_application() -> None:
     """Needed by the embedded web browser; harmless when it is absent. Call before QApplication()."""
     try:
@@ -57,6 +62,18 @@ def close_help() -> None:
         except RuntimeError:
             pass
         _help_window = None
+
+
+def shutdown() -> None:
+    """Connected to QApplication.aboutToQuit: tear the web view down before Qt exits."""
+    global _help_window
+    window, _help_window = _help_window, None
+    if window is not None:
+        try:
+            window.close()
+            window.dispose_web()
+        except RuntimeError:
+            pass
 
 
 def show_guide(parent=None, mark_seen: bool = True):

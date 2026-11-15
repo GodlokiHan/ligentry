@@ -189,6 +189,29 @@ class HelpWindow(QMainWindow):
             self._zoom_steps = 0
         self._apply_zoom()
 
+    def dispose_web(self) -> None:
+        """Destroy the web view and its page now, before the application shuts down.
+
+        QtWebEngine crashes at exit if a page outlives its profile, so this runs
+        from help_menu.shutdown (QApplication.aboutToQuit).
+        """
+        view, self._view = self._view, None
+        if view is None:
+            return
+        try:
+            from shiboken6 import delete
+            page = view.page()
+            view.stop()
+            view.setPage(None)
+            delete(page)
+            delete(view)
+        except Exception:
+            try:
+                view.deleteLater()
+            except Exception:
+                pass
+        self._web_failed = True  # this window will not create another view
+
     def closeEvent(self, event) -> None:
         try:
             s = self._settings()
