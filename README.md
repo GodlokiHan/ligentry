@@ -1,6 +1,6 @@
 # Ligentry
 
-Open-source desktop app for computational drug design: molecular docking with a 3D viewer and a built-in validation benchmark, plus a pharmacokinetic/pharmacodynamic (PK/PD) simulator. Protein-structure work is planned.
+Open-source desktop app for computational drug design: molecular docking with a 3D viewer and a built-in validation benchmark, plus a pharmacokinetic/pharmacodynamic (PK/PD) simulator, a built-in manual with a first-launch guide, and a small browser for looking up papers and databases. Protein-structure work is planned.
 
 **Status: early (v0.1.0).** Linux only for now. Windows is not supported yet.
 
@@ -25,10 +25,16 @@ Docking uses [AutoDock Vina](https://github.com/ccsb-scripps/AutoDock-Vina). Lig
 - Half-lives reported for the current parameters: terminal and distribution half-life for two compartments, terminal only for one.
 - Sigmoid Emax effect model (a negative Emax models inhibition), either **direct** (the effect follows the plasma concentration at once) or **delayed** through an effect compartment: the effect follows a hypothetical effect-site concentration Ce that lags plasma, dCe/dt = ke0 (C - Ce). The delay is described by ke0 (1/h) and its equilibration half-life ln2/ke0, which is shown with the results.
 - Load measured effect data and fit E0, Emax, EC50, optionally the Hill coefficient and ke0 (tick **ke0** to fit a delayed effect), using the concentrations predicted by the PK model. Because the error surface of a delayed effect has local minima, ke0 is started from a coarse scan unless you ask the fit to start from the values in the form. Effect residuals are plotted too: with a direct model, a smooth up-then-down pattern suggests a delayed effect, so switch to the delayed model and fit ke0.
-- Load measured effect data and fit E0, Emax, EC50, optionally the Hill coefficient and, for a delayed effect, ke0, using the concentrations predicted by the PK model. Because the error surface of a delayed effect has local minima, ke0 is started from a coarse scan unless you give it a starting value. Effect residuals are plotted too: with a direct model, a smooth up-then-down pattern suggests a delayed effect, so switch to the delayed model and fit ke0.
 - Export the simulation as CSV (time, concentration, gut, central and, for two compartments, peripheral amounts, plus the effect-site concentration for a delayed effect and the effect when it is switched on).
 
 Units throughout: dose in mg, volume in L, clearance in L/h, rate constants in 1/h, time in h, concentration in mg/L.
+
+### Help, guide and research lookup
+
+- **Welcome guide** on the first launch (reopen it from **Help > Welcome guide**).
+- **Manual** (Help > ligentry manual, or **F1**, which opens the page for the window you are in): 37 offline pages covering every feature, a worked example with sample data, a glossary, units, keyboard shortcuts and troubleshooting. It has full-text search, back/forward and a contents page.
+- **Web tab** in the Help window, an embedded browser for papers, drug and protein databases and videos. The search box can search the manual, or PubMed, Europe PMC, PubMed Central, ClinicalTrials.gov, DailyMed, MedlinePlus, PubChem, ChEMBL, UniProt, RCSB PDB, Wikipedia, YouTube or the web. Typing a DOI, `PMID 12345678`, `PMC1234567`, `NCT01234567`, `PDB 1HSG` or a web address goes straight to that page.
+- Nothing is loaded from the web until you search or click a web link, only public http/https pages open, and the manual works offline. If the embedded browser is unavailable, pages open in your normal browser. Some sites refuse requests from some networks (Google Scholar did in testing, so it is not offered).
 
 ## Install (Linux)
 
@@ -43,7 +49,7 @@ pip install -e . --no-deps
 python scripts/install_launcher.py   # optional: adds "ligentry" to your application menu
 ```
 
-The environment file pins the versions the benchmark baseline was measured with. Install the Qt and VTK packages from the pip entries in that file, not from conda: the conda builds could not reach the system OpenGL on the development machine. Use `--no-deps` with `pip install -e .` so pip does not replace the pinned packages.
+The environment file pins the versions the benchmark baseline was measured with. Install the Qt and VTK packages from the pip entries in that file, not from conda: the conda builds could not reach the system OpenGL on the development machine. Use `--no-deps` with `pip install -e .` so pip does not replace the pinned packages. The pip `PySide6` package includes the web engine used by the Help window's Web tab; if it is missing, pages open in your normal browser instead.
 
 ## Use
 
@@ -55,7 +61,7 @@ Run `ligentry-gui`, or open **ligentry** from your application menu.
 2. Enter a ChEMBL target ID (for example `CHEMBL243`) or paste SMILES, one per line as `SMILES [name]`.
 3. Press **Run docking** (Ctrl+R). Select a row to see its pose.
 
-Use **File > Open run...** to reload an earlier run folder without docking again.
+Use **File > Open run...** to reload an earlier run folder without docking again. Press **F1** at any time for the manual.
 
 ### PK/PD simulator
 
@@ -73,6 +79,8 @@ python -m ligentry.gui.pkpd_window
 Tips for fitting a two-compartment model: IV bolus data with early, rapidly falling samples identify V, CL, V2 and Q best. Oral data alone make the fit harder and give apparent values (V/F, CL/F, V2/F, Q/F).
 
 Tips for fitting a delayed effect: measure the effect densely around and after the concentration peak, where the lag is visible. Compare the residuals of the direct and delayed models before trusting a fitted ke0.
+
+The manual has a worked example with sample data you can save and fit (Help > ligentry manual > PK/PD simulator > Worked example: fitting data).
 
 ### Command line
 
@@ -137,6 +145,11 @@ These tests show the maths is implemented correctly. They do not show that any p
 - EC50 and Emax trade off against each other when the measured concentrations never approach EC50, so the fit notes may warn about wide uncertainty.
 - ke0 and EC50 are only as reliable as the PK model that supplies the plasma concentrations: a wrong PK model can look like a delay. With sparse effect data ke0 is poorly determined, and a ke0 that finishes on its limits (0.001 or 100 per hour) is a sign the data cannot determine it.
 
+**Help and web**
+
+- Pages opened in the Web tab come from other sites and are not reviewed by ligentry. Nothing in ligentry or its manual is medical advice.
+- The search addresses of external sites may change over time; the plain web search always works.
+
 ## Project layout
 
 ```
@@ -145,8 +158,10 @@ ligentry/
   data/        PDB and ChEMBL access
   plugins/     receptor prep (Open Babel), ligand prep (RDKit + Meeko), docking (Vina)
   workflows/   docking, redocking, benchmark
-  gui/         docking window, 3D viewer, background docking job, PK/PD window, launcher
+  gui/         docking window, 3D viewer, background docking job, PK/PD window, launcher,
+               Help window, welcome guide dialog, Help menu wiring
   pkpd/        PK/PD models, fitting, data loaders, residuals (no Qt dependency)
+  help/        manual pages, search, page rendering, web sources, guide logic (no Qt dependency)
   cli.py       command-line interface
 scripts/       tests, launcher installer, 4DFR investigation
 benchmarks/    benchmark documentation and baseline
@@ -162,12 +177,18 @@ for t in scripts/test_*.py; echo $t; python $t | tail -2; end
 
 Each script ends with `ALL PASSED` or a count such as `81/81 checks passed`. The PK/PD scripts are `test_pkpd`, `test_twocomp`, `test_effect`, `test_effect_compartment`, `test_observations`, `test_residuals`, `test_effect_residuals`, `test_pkpd_workflow`, `test_pkpd_window` and `test_pkpd_window_delayed`. They need only NumPy and SciPy, apart from the two window tests, which also need Qt.
 
+The help scripts are `test_help` (manual, search, web helpers and guide logic; no Qt; it also checks that the manual still matches the program's shortcuts, defaults and CSV columns) and `test_help_gui` (Help window, guide dialog and Help menus, offscreen). To try the embedded web view in the second one too: `env LIGENTRY_TEST_WEB=1 python scripts/test_help_gui.py`.
+
 ## Roadmap
 
 - PK/PD: joint PK and PD fitting, infusions and other routes, SBML import.
 - Docking: OpenMM pose refinement and rescoring (aimed at the 1HSG and 1EVE ranking failures), a protonation step if it improves the full benchmark, command-line flags for stereoisomer options.
 - Protein-structure workflows.
 - Replace the Open Babel subprocess with a pure-Python route, and port to Windows.
+
+## Privacy
+
+ligentry has no usage tracking. It contacts the network only when you run docking (to download the structure from the RCSB PDB and ligands from ChEMBL) and when you search or open a page in the Help window. Settings (recent runs, whether the guide was shown) are stored in `~/.config/ligentry/ligentry.conf`. The Web tab keeps cookies and cache like any browser; **Web > Clear web data** in the Help window removes them.
 
 ## License and credits
 
