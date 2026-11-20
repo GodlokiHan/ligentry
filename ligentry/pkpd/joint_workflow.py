@@ -27,10 +27,7 @@ def run_joint_fit(
     weighting: str = "proportional",
     use_form_start: bool = False,
 ) -> tuple[JointFitResult, np.ndarray]:
-    """Simultaneously fit free PK and PD parameters to concentration and effect datasets.
-
-    Returns (result, driving_concentrations_at_pd_times).
-    """
+    """Simultaneously fit free PK and PD parameters to concentration and effect datasets."""
     free_pk = tuple(free_pk)
     free_pd = tuple(free_pd)
     pk, regimen, _eff = build_model(inputs)
@@ -53,10 +50,11 @@ def run_joint_fit(
         weighting=weighting,
         use_form_start=use_form_start,
     )
+    active_reg = result.regimen if result.regimen is not None else regimen
     if result.effect.ke0 is not None:
-        drive = effect_site_concentration(result.pk, regimen, pd_obs.times, result.effect.ke0)
+        drive = effect_site_concentration(result.pk, active_reg, pd_obs.times, result.effect.ke0)
     else:
-        drive = simulate(result.pk, regimen, pd_obs.times).conc
+        drive = simulate(result.pk, active_reg, pd_obs.times).conc
     return result, drive
 
 
@@ -99,7 +97,6 @@ def joint_fit_notes(result: JointFitResult, drive_conc: np.ndarray) -> list[str]
     if not result.success:
         notes.append(f"The joint optimiser did not converge: {result.message}")
 
-    # Reuse PK structural & identifiability checks via a lightweight FitResult adapter
     pk_cv = (
         {n: result.cv_percent[n] for n in result.free_pk if result.cv_percent.get(n) is not None}
         if result.cv_percent is not None

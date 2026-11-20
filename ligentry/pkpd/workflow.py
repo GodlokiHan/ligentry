@@ -30,6 +30,7 @@ LINEAR = "linear"
 MICHAELIS_MENTEN = "michaelis_menten"
 ORAL = "oral"
 IV_BOLUS = "iv_bolus"
+IV_INFUSION = "iv_infusion"
 
 # parameter name -> (short label, unit)
 PARAMETER_INFO = {
@@ -40,12 +41,10 @@ PARAMETER_INFO = {
     "km": ("Km", "mg/L"),
     "peripheral_volume": ("V2", "L"),
     "intercompartmental_clearance": ("Q", "L/h"),
+    "tlag": ("Tlag", "h"),
 }
 
 MAX_TIME_H = 100_000.0
-
-# Below this ratio the two exponential phases of a two-compartment model are too
-# close together for data to tell them apart from a single phase.
 _MIN_PHASE_RATIO = 3.0
 
 
@@ -80,6 +79,9 @@ class ModelInputs:
     # concentration that lags plasma with rate constant ke0 (1/h)
     delayed_effect: bool = False
     ke0: float = 0.5
+    # zero-order IV infusion duration (h) and oral absorption lag time (h)
+    infusion_duration: float = 1.0
+    tlag: float = 0.0
 
 
 @dataclass
@@ -93,13 +95,12 @@ class SimulationResult:
 
 
 def free_choices(
-    elimination: str, compartments: int = 1, route: str = ORAL
+    elimination: str,
+    compartments: int = 1,
+    route: str = ORAL,
+    include_tlag: bool = False,
 ) -> tuple[str, ...]:
-    """Parameters that can be fitted for the given model structure.
-
-    ka is left out for IV bolus dosing; the peripheral volume and intercompartmental
-    clearance are added for a two-compartment model.
-    """
+    """Parameters that can be fitted for the given model structure."""
     if elimination == LINEAR:
         names: tuple[str, ...] = ("ka", "volume", "clearance")
     elif elimination == MICHAELIS_MENTEN:
@@ -110,9 +111,12 @@ def free_choices(
         names += ("peripheral_volume", "intercompartmental_clearance")
     elif compartments != 1:
         raise ValueError("compartments must be 1 or 2")
-    if route == IV_BOLUS:
+    if route == ORAL:
+        if include_tlag:
+            names += ("tlag",)
+    elif route in (IV_BOLUS, IV_INFUSION):
         names = tuple(n for n in names if n != "ka")
-    elif route != ORAL:
+    else:
         raise ValueError(f"unknown dosing route '{route}'")
     return names
 
@@ -144,8 +148,12 @@ def build_model(
     else:
         raise ValueError(f"unknown elimination model '{inputs.elimination}'")
     regimen = Regimen(
-        dose=inputs.dose, interval=inputs.interval, n_doses=int(inputs.n_doses),
+        dose=inputs.dose,
+        interval=inputs.interval,
+        n_doses=int(inputs.n_doses),
         route=inputs.route,
+        infusion_duration=inputs.infusion_duration,
+        tlag=inputs.tlag,
     )
     effect = (
         EffectParameters(
@@ -159,7 +167,7 @@ def build_model(
 
 
 def _nice_ceiling(x: float) -> float:
-    """Round up to a tidy number of hours (1 h steps for short spans, days for long ones)."""
+    """Round up to a tidy number of hours."""
     if x <= 0:
         return 1.0
     if x < 12:
@@ -176,20 +184,23 @@ def _nice_ceiling(x: float) -> float:
 
 
 def default_time_span(pk: PKParameters, regimen: Regimen) -> float:
-    """A window that shows the last dose being absorbed and mostly eliminated (hours).
-
-    The tail is five terminal half-lives, so a two-compartment model gets the longer
-    window its slow terminal phase needs. For Michaelis-Menten elimination the
-    zero-order phase at Vmax is added first, then a first-order tail at low
-    concentration.
-    """
+    """A window that shows the last dose being absorbed/infused and mostly eliminated (hours)."""
     last_dose = float(regimen.dose_times()[-1])
-    absorption = 0.0 if regimen.route == IV_BOLUS else 3.0 / pk.ka
+    if regimen.route == IV_BOLUS:
+        input_span = 0.0
+    elif regimen.route == IV_INFUSION:
+        input_span = regimen.infusion_duration
+    else:
+        input_span = regimen.tlag + 3.0 / pk.ka
     elimination = 5.0 * half_lives(pk)["terminal"]
     if pk.elimination == MICHAELIS_MENTEN:
-        amount = regimen.dose if regimen.route == IV_BOLUS else pk.bioavailability * regimen.dose
+        amount = (
+            regimen.dose
+            if regimen.route in (IV_BOLUS, IV_INFUSION)
+            else pk.bioavailability * regimen.dose
+        )
         elimination += amount / pk.vmax
-    return min(_nice_ceiling(last_dose + absorption + elimination), MAX_TIME_H)
+    return min(_nice_ceiling(last_dose + input_span + elimination), MAX_TIME_H)
 
 
 def half_life_text(pk: PKParameters) -> str:
@@ -208,7 +219,10 @@ def effect_half_life_text(effect: EffectParameters | None) -> str:
     """One line about the effect-site delay, or an empty string for a direct effect."""
     if effect is None or effect.ke0 is None:
         return ""
-    return f"Effect-site equilibration half-life {equilibration_half_life(effect.ke0):.3g} h (ke0 {effect.ke0:.3g} 1/h)"
+    return (
+        f"Effect-site equilibration half-life {equilibration_half_life(effect.ke0):.3g} h "
+        f"(ke0 {effect.ke0:.3g} 1/h)"
+    )
 
 
 def simulate_inputs(
@@ -229,8 +243,15 @@ def simulate_inputs(
     dose_times = dose_times[dose_times <= t_end]
     extra = dose_times
     if regimen.route == IV_BOLUS:
-        # a point just before each later dose, so the jump in concentration is drawn as a step
         extra = np.concatenate([dose_times, dose_times[dose_times > 0.0] - 1e-9])
+    elif regimen.route == IV_INFUSION:
+        stops = dose_times + regimen.infusion_duration
+        stops = stops[stops <= t_end]
+        extra = np.concatenate([dose_times, stops])
+    elif regimen.route == ORAL and regimen.tlag > 0.0:
+        arrivals = dose_times + regimen.tlag
+        arrivals = arrivals[arrivals <= t_end]
+        extra = np.concatenate([dose_times, arrivals])
     times = np.unique(np.concatenate([np.linspace(0.0, t_end, int(n_points)), extra]))
     sim = simulate(pk, regimen, times, effect)
     return SimulationResult(
@@ -277,7 +298,11 @@ def fit_notes(result: FitResult) -> list[str]:
             "(more points than fitted parameters are needed)."
         )
     else:
-        poor = [PARAMETER_INFO[n][0] for n, cv in result.cv_percent.items() if cv > 50.0]
+        poor = [
+            PARAMETER_INFO[n][0]
+            for n, cv in result.cv_percent.items()
+            if cv is not None and cv > 50.0
+        ]
         if poor:
             notes.append("Poorly determined (CV above 50%): " + ", ".join(poor) + ".")
     p = result.params
@@ -315,9 +340,14 @@ def fit_notes(result: FitResult) -> list[str]:
                     f"{alpha / beta:.2g}), so these data cannot tell a two-compartment model from "
                     "a one-compartment one. Consider the one-compartment model."
                 )
-    if oral and any(n in result.free for n in ("volume", "clearance", *(
-        ("peripheral_volume", "intercompartmental_clearance") if two else ()
-    ))):
+    if oral and any(
+        n in result.free
+        for n in (
+            "volume",
+            "clearance",
+            *(("peripheral_volume", "intercompartmental_clearance") if two else ()),
+        )
+    ):
         if two:
             notes.append(
                 "Oral data cannot separate bioavailability from the volumes and clearances, so "

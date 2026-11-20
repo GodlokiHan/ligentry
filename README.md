@@ -23,11 +23,11 @@ Open-source desktop app for computational drug design: GPU-accelerated molecular
 ### PK/PD simulator
 
 - One- or two-compartment model (central plus an optional peripheral compartment, set by its volume V2 and the intercompartmental clearance Q).
-- Oral or intravenous (IV) bolus dosing, single or repeated doses.
+- Oral (with optional absorption lag time `Tlag`), intravenous (IV) bolus, or zero-order IV infusion dosing, single or repeated doses.
 - Linear (clearance) or Michaelis-Menten elimination, with either number of compartments.
 - Half-lives reported for the current parameters: terminal and distribution half-life for two compartments, terminal only for one.
 - Sigmoid Emax effect model (a negative Emax models inhibition), either **direct** (the effect follows the plasma concentration at once) or **delayed** through an effect compartment: the effect follows a hypothetical effect-site concentration Ce that lags plasma, dCe/dt = ke0 (C - Ce). The delay is described by ke0 (1/h) and its equilibration half-life ln2/ke0, which is shown with the results.
-- **Sequential or Joint PK/PD fitting:** fit PK parameters (`ka, V, CL, Vmax, Km, V2, Q`) to plasma concentrations and PD parameters (`E0, Emax, EC50, Hill, ke0`) to measured effects either sequentially or **simultaneously (jointly)** via **Fit PK + PD jointly**, balancing concentration and effect residual scales and propagating PK uncertainty into PD estimates.
+- **Sequential or Joint PK/PD fitting:** fit PK parameters (`ka, V, CL, Vmax, Km, V2, Q, Tlag`) to plasma concentrations and PD parameters (`E0, Emax, EC50, Hill, ke0`) to measured effects either sequentially or **simultaneously (jointly)** via **Fit PK + PD jointly**, balancing concentration and effect residual scales and propagating PK uncertainty into PD estimates.
 - Export the simulation as CSV (time, concentration, gut, central and, for two compartments, peripheral amounts, plus the effect-site concentration for a delayed effect and the effect when it is switched on).
 
 Units throughout: dose in mg, volume in L, clearance in L/h, rate constants in 1/h, time in h, concentration in mg/L.
@@ -80,8 +80,8 @@ Open it from **Tools > PK/PD simulator** (or the toolbar button) in the docking 
 python -m ligentry.gui.pkpd_window
 ```
 
-1. Choose the route (oral or IV bolus), then set the dose, regimen and PK parameters. Choose **Two compartments** to enable V2 and Q. The concentration curve updates as you change them.
-2. Optionally load measured concentrations (a CSV with time in h and concentration in mg/L) and press **Fit parameters** to estimate the PK parameters. With IV bolus dosing the absorption rate ka is not fitted.
+1. Choose the route (oral, IV bolus, or IV infusion), then set the dose, regimen, infusion duration or oral lag time (`Tlag`), and PK parameters. Choose **Two compartments** to enable V2 and Q. The concentration curve updates as you change them.
+2. Optionally load measured concentrations (a CSV with time in h and concentration in mg/L) and press **Fit parameters** to estimate the PK parameters. With IV bolus or IV infusion dosing, absorption rate `ka` and `Tlag` are disabled.
 3. Tick **Effect** to add the effect curve. To model a lag between concentration and effect, tick **Delayed effect (effect compartment)** in the same box and set the effect-site rate ke0; the effect-site concentration is then drawn as a dashed curve on the concentration plot. Optionally load measured effects (a CSV with time in h and effect), choose which parameters to fit (tick **ke0** to fit a delayed effect; it is off by default) and press **Fit effect**.
 4. When both concentration and effect datasets are loaded, **Fit PK + PD jointly** estimates all ticked PK and PD parameters simultaneously and propagates PK uncertainty into PD estimates. **Use fitted values**, **Use fitted effect values**, and **Use joint fitted values** copy the estimates back into the form.
 
@@ -125,12 +125,12 @@ The benchmark redocks the crystal ligand of 8 diverse complexes. A run passes wh
 
 The simulator is checked against analytic solutions rather than a benchmark data set:
 
-- IV bolus and oral two-compartment curves match the biexponential and three-exponential closed forms.
+- IV bolus, IV infusion, and oral two-compartment curves match the closed-form solutions (including overlapping infusions and shifted oral lag time `Tlag`).
 - Dose = central + peripheral + eliminated amount (mass balance), and AUC equals dose/CL (times F for oral dosing).
-- Limiting cases: Q → 0 recovers the one-compartment model, and very fast distribution behaves as one compartment of volume V1 + V2.
+- Limiting cases: Q → 0 recovers the one-compartment model, and very fast distribution behaves as one compartment of volume V1 + V2, and very short IV infusions recover the IV bolus limit.
 - Repeated doses obey superposition, and saturated Michaelis-Menten elimination removes Vmax mg/h from the whole body.
 - The effect-site concentration matches its closed form after an IV bolus (including the limit where ke0 equals the elimination rate), its AUC equals the plasma AUC, a very large ke0 recovers the direct effect, and a delayed effect shows hysteresis: the same plasma concentration gives different effects on the way up and down.
-- Sequential and joint fits recover known parameters from simulated data (to 0.1% without noise, within 25% with noise). A delayed-effect fit recovers ke0, E0, Emax and EC50 from several different starting values for ke0, and data from a direct effect push ke0 to its upper limit, which the fit notes report as no detectable delay.
+- Sequential and joint fits recover known parameters from simulated data (to 0.1–1% without noise, within 25% with noise), including `Tlag` and `ke0`. Data from a direct effect push ke0 to its upper limit, which the fit notes report as no detectable delay.
 
 These tests show the maths is implemented correctly. They do not show that any parameter set describes a real drug.
 
@@ -147,7 +147,7 @@ These tests show the maths is implemented correctly. They do not show that any p
 **PK/PD**
 
 - The output is only as good as the parameters and data you supply. It is a modelling tool, not a prediction of how a drug behaves in people, and nothing here is dosing advice.
-- At most two compartments, oral or IV bolus dosing only (no infusions or other routes), and the effect is either direct or a single effect compartment. Other delay models (for example indirect-response models or tolerance) are not available.
+- At most two compartments, oral, IV bolus, or IV infusion dosing only (no other extravascular routes), and the effect is either direct or a single effect compartment. Other delay models (for example indirect-response models or tolerance) are not available.
 - From oral data alone, bioavailability F and volume V cannot be separated: the fitted volumes are V/F and V2/F, and clearances are CL/F and Q/F.
 - Absorption and elimination can be swapped (flip-flop kinetics) when only oral data are fitted.
 - A two-compartment fit needs data that show both phases. When the distribution and terminal phases are close together, or early samples are missing, V2 and Q are poorly determined and the fit notes will say so.
@@ -186,13 +186,13 @@ Each wrapped docking tool is a plugin behind a common interface, so engines can 
 for t in scripts/test_*.py; echo $t; python $t | tail -2; end
 ```
 
-Each script ends with `ALL PASSED` or a count such as `1275 passed, 0 failed`. The PK/PD scripts are `test_pkpd`, `test_twocomp`, `test_effect`, `test_effect_compartment`, `test_observations`, `test_residuals`, `test_effect_residuals`, `test_pkpd_workflow`, `test_joint_fit`, `test_pkpd_window` and `test_pkpd_window_delayed`. They need only NumPy and SciPy, apart from the two window tests, which also need Qt.
+Each script ends with `ALL PASSED` or a count such as `1333 passed, 0 failed`. The PK/PD scripts are `test_pkpd`, `test_twocomp`, `test_effect`, `test_effect_compartment`, `test_observations`, `test_residuals`, `test_effect_residuals`, `test_pkpd_workflow`, `test_joint_fit`, `test_infusion_tlag`, `test_pkpd_window` and `test_pkpd_window_delayed`. They need only NumPy and SciPy, apart from the two window tests, which also need Qt.
 
 The help scripts are `test_help` (manual, search, web helpers and guide logic; no Qt; it also checks that the manual still matches the program's shortcuts, defaults and CSV columns) and `test_help_gui` (Help window, guide dialog and Help menus, offscreen). To try the embedded web view in the second one too: `env LIGENTRY_TEST_WEB=1 python scripts/test_help_gui.py`.
 
 ## Roadmap
 
-- PK/PD: infusions and other routes, SBML import.
+- PK/PD: extravascular routes beyond oral, transit-compartment absorption, SBML import.
 - Docking: native PDBQT domain fine-tuning for the neural pose rescorer (aimed at `1HSG` and `4DFR`), OpenMM pose refinement, a protonation step if it improves the full benchmark, command-line flags for stereoisomer options.
 - Protein-structure workflows.
 - Replace the Open Babel subprocess with a pure-Python route, and port to Windows.

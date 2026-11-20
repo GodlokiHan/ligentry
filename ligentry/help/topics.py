@@ -414,22 +414,26 @@ means a value is not allowed; the text says which.</p>
         id="pkpd-dosing",
         title="Dosing: route, dose and schedule",
         section="PK/PD simulator",
-        summary="Oral and IV bolus doses, repeated dosing and the interval.",
-        keywords=("route", "oral", "iv", "intravenous", "bolus", "dose", "interval", "number of doses", "regimen", "schedule"),
+        summary="Oral, IV bolus, and IV infusion doses, lag time Tlag, repeated dosing and interval.",
+        keywords=("route", "oral", "iv", "intravenous", "bolus", "infusion", "duration", "tlag", "lag time", "dose", "interval", "number of doses", "regimen", "schedule"),
         related=("pkpd-model", "pkpd-readout", "glossary"),
-        web=("oral versus intravenous bolus pharmacokinetics", "multiple dosing accumulation steady state"),
+        web=("oral versus intravenous bolus pharmacokinetics", "zero order intravenous infusion pharmacokinetics", "multiple dosing accumulation steady state"),
         body="""
 <table @T@>
 <tr><th>Setting</th><th>Default</th><th>Meaning</th></tr>
-<tr><td>Route</td><td>Oral</td><td><b>Oral</b>: each dose goes to the gut (times bioavailability F) and is absorbed with rate ka.
-<b>IV bolus</b>: the whole dose is injected straight into the blood at once; ka and F do not apply.</td></tr>
+<tr><td>Route</td><td>Oral</td><td><b>Oral</b>: each dose enters the gut (times bioavailability F) after optional lag time Tlag and absorbs with rate ka.
+<b>IV bolus</b>: the whole dose is injected straight into the blood at once.
+<b>IV infusion</b>: each dose is infused at constant rate dose / duration over the infusion duration.</td></tr>
 <tr><td>Dose</td><td>100 mg</td><td>Amount in each dose.</td></tr>
 <tr><td>Number of doses</td><td>1</td><td>How many doses are given.</td></tr>
 <tr><td>Interval between doses</td><td>12 h</td><td>Time between doses (used when there is more than one).</td></tr>
+<tr><td>Infusion duration</td><td>1 h</td><td>Duration of each IV infusion (used only for IV infusion).</td></tr>
+<tr><td>Oral lag time Tlag</td><td>0 h</td><td>Delay before oral absorption begins (used only for oral dosing).</td></tr>
 </table>
-<p>With an oral dose the concentration rises smoothly. With an IV bolus it <b>jumps</b> at the moment of the dose
-and then falls. With repeated doses the drug can build up (accumulate) when it is eliminated more slowly than it is given.</p>
-<p>The first dose is at time 0. Doses are instantaneous.</p>
+<p>With an oral dose the concentration stays zero until <b>Tlag</b> and then rises smoothly. With an IV bolus it <b>jumps</b>
+at the moment of the dose and then falls. With an IV infusion it climbs over the infusion duration and peaks when the
+infusion stops. Overlapping repeated infusions add their infusion rates automatically.</p>
+<p>The first dose starts at time 0.</p>
 """.replace("@T@", _TABLE),
     ),
     Topic(
@@ -449,14 +453,14 @@ central compartment divided by its volume.</p>
 <tr><th>Parameter</th><th>Default</th><th>Meaning</th></tr>
 <tr><td>Compartments</td><td>One</td><td><b>One</b>: the drug distributes instantly. <b>Two</b>: it also exchanges with a
 peripheral compartment (tissues), which gives a fast early fall followed by a slower terminal phase.</td></tr>
-<tr><td>Absorption rate ka</td><td>1 1/h</td><td>How fast an oral dose enters the blood. Greyed out for IV.</td></tr>
+<tr><td>Absorption rate ka</td><td>1 1/h</td><td>How fast an oral dose enters the blood. Greyed out for IV routes.</td></tr>
 <tr><td>Volume V (central)</td><td>40 L</td><td>Volume of the central compartment.</td></tr>
 <tr><td>Peripheral volume V2</td><td>60 L</td><td>Two compartments only.</td></tr>
 <tr><td>Intercompartmental clearance Q</td><td>8 L/h</td><td>Two compartments only: how fast drug moves between the two.</td></tr>
 <tr><td>Elimination</td><td>Linear</td><td><b>Linear</b>: removal proportional to concentration, set by clearance CL.
 <b>Michaelis-Menten</b>: removal saturates at high concentration (Vmax in mg/h, Km in mg/L).</td></tr>
 <tr><td>Clearance CL</td><td>5 L/h</td><td>Volume of blood cleared of drug per hour (linear elimination).</td></tr>
-<tr><td>Bioavailability F</td><td>1.0</td><td>Fraction of an oral dose that reaches the gut compartment. Greyed out for IV.</td></tr>
+<tr><td>Bioavailability F</td><td>1.0</td><td>Fraction of an oral dose that reaches the gut compartment. Greyed out for IV routes.</td></tr>
 </table>
 <p>Boxes that do not apply to your choices are greyed out. Half-lives are shown in the readout; for one compartment
 with linear elimination the half-life is ln 2 &times; V / CL. With Michaelis-Menten elimination the half-life shown describes the
@@ -531,7 +535,7 @@ It measures total exposure.</li>
 <li><b>RMSE</b> against your data when concentrations or effects are loaded.</li>
 </ul>
 <h3>Time window</h3>
-<p>By default the window is chosen automatically: long enough to show the last dose being absorbed and about five
+<p>By default the window is chosen automatically: long enough to show the last dose being absorbed or infused and about five
 terminal half-lives of elimination, and extended to cover your data. Untick <b>Choose the time window automatically</b>
 to type your own <b>End time</b> (up to 100 000 h).</p>
 """,
@@ -567,7 +571,7 @@ effect..., response..., e, pd, y. A header with two unrecognised names is read a
         section="PK/PD simulator",
         summary="Load data, choose parameters, fit, read the table and notes, use the result.",
         keywords=("fit", "fitting", "estimate", "cv", "weighting", "proportional", "rmse", "optimiser", "load data", "use fitted values",
-                  "uncertainty", "least squares"),
+                  "uncertainty", "least squares", "tlag"),
         related=("pkpd-data-format", "pkpd-effect-fit", "pkpd-joint-fit", "pkpd-residuals", "pkpd-example", "pkpd-limits"),
         web=("nonlinear least squares pharmacokinetic parameter estimation", "population versus individual PK fitting"),
         body="""
@@ -576,7 +580,8 @@ effect..., response..., e, pd, y. A header with two unrecognised names is read a
 collected, and enter starting values that are roughly right.</li>
 <li>Press <b>Load data...</b> and choose your concentration file (<a href="topic:pkpd-data-format">format</a>).
 The points appear on the plot.</li>
-<li>Tick the parameters to fit. Boxes that do not apply are greyed out (for example ka for an IV bolus).</li>
+<li>Tick the parameters to fit (including <b>Tlag</b> for oral data if there is a delay before absorption starts).
+Boxes that do not apply are greyed out (for example ka and Tlag for IV bolus or IV infusion).</li>
 <li>Choose the <b>Weighting</b>: <i>Proportional</i> (relative error, the usual choice, so small concentrations
 count as much as large ones) or <i>None</i> (absolute error).</li>
 <li>Press <b>Fit parameters</b>. The table shows each estimate, its unit and its <b>CV %</b>; below it are the RMSE and notes.</li>
@@ -739,7 +744,7 @@ there is no detectable delay. That is the correct answer.</li>
 <tr><th>Column</th><th>Meaning</th></tr>
 <tr><td>time_h</td><td>Time in hours.</td></tr>
 <tr><td>conc_mg_per_L</td><td>Plasma concentration.</td></tr>
-<tr><td>gut_mg</td><td>Amount left in the gut (zero for an IV bolus).</td></tr>
+<tr><td>gut_mg</td><td>Amount left in the gut (zero for IV routes).</td></tr>
 <tr><td>central_mg</td><td>Amount in the central compartment.</td></tr>
 <tr><td>peripheral_mg</td><td>Amount in the peripheral compartment (only with two compartments).</td></tr>
 <tr><td>effect_site_mg_per_L</td><td>Effect-site concentration (only with a delayed effect).</td></tr>
@@ -759,7 +764,7 @@ there is no detectable delay. That is the correct answer.</li>
         body="""
 <ul>
 <li>It is a modelling tool, not a prediction of how a drug behaves in people, and nothing here is dosing advice.</li>
-<li>At most <b>two compartments</b>; <b>oral or IV bolus</b> only (no infusions, other routes, or lag times).</li>
+<li>At most <b>two compartments</b>; <b>oral, IV bolus, or IV infusion</b> dosing (no other extravascular routes).</li>
 <li>The effect is <b>direct or one effect compartment</b>. There are no indirect-response, tolerance or disease-progression models.</li>
 <li>From <b>oral data alone, F and V cannot be separated</b>: fitted volumes are V/F and V2/F, and clearances are CL/F and Q/F.</li>
 <li><b>Flip-flop</b>: with oral data, absorption and elimination can swap and fit equally well.</li>
@@ -812,7 +817,7 @@ there is no detectable delay. That is the correct answer.</li>
         title="Glossary",
         section="Reference",
         summary="Short definitions of the terms used in ligentry.",
-        keywords=("definition", "terms", "meaning", "what is", "abbreviation", "auc", "cmax", "rmsd", "smiles", "chembl", "pdb"),
+        keywords=("definition", "terms", "meaning", "what is", "abbreviation", "auc", "cmax", "rmsd", "smiles", "chembl", "pdb", "tlag", "infusion"),
         related=("units", "pkpd-model", "docking-overview"),
         body="""
 <table @T@>
@@ -829,6 +834,7 @@ there is no detectable delay. That is the correct answer.</li>
 <tr><td>Flip-flop kinetics</td><td>Absorption slower than elimination, so the two rates can be confused when fitting oral data.</td></tr>
 <tr><td>Hill coefficient</td><td>Steepness of the concentration-effect curve.</td></tr>
 <tr><td>Hysteresis</td><td>Effect that differs at the same concentration on the way up and on the way down, because of a delay.</td></tr>
+<tr><td>IV infusion</td><td>Constant zero-order delivery (dose / duration) into the central compartment over a set duration.</td></tr>
 <tr><td>ke0</td><td>Rate constant of equilibration between plasma and the effect site (1/h).</td></tr>
 <tr><td>Ligand / receptor</td><td>The small molecule / the protein it binds.</td></tr>
 <tr><td>Michaelis-Menten elimination</td><td>Saturable removal: Vmax (mg/h) and Km (mg/L).</td></tr>
@@ -839,6 +845,7 @@ there is no detectable delay. That is the correct answer.</li>
 <tr><td>SE</td><td>Standard error: the uncertainty of a fitted value.</td></tr>
 <tr><td>SMILES</td><td>A line of text that describes a molecule's structure.</td></tr>
 <tr><td>Stereoisomers</td><td>Molecules with the same bonds but different 3D arrangement.</td></tr>
+<tr><td>Tlag</td><td>Oral absorption lag time (h) between administration and the start of absorption.</td></tr>
 <tr><td>Vina score</td><td>Docking score in kcal/mol; more negative means a better predicted fit.</td></tr>
 </table>
 """.replace("@T@", _TABLE),
@@ -859,7 +866,7 @@ there is no detectable delay. That is the correct answer.</li>
 <tr><td>Rate constants (ka, ke0)</td><td>1/h</td></tr>
 <tr><td>Vmax</td><td>mg/h</td></tr>
 <tr><td>Concentration, Km, EC50</td><td>mg/L</td></tr>
-<tr><td>Time</td><td>h</td></tr>
+<tr><td>Time, infusion duration, Tlag</td><td>h</td></tr>
 <tr><td>AUC</td><td>mg&middot;h/L</td></tr>
 <tr><td>Vina score</td><td>kcal/mol</td></tr>
 </table>

@@ -1,5 +1,5 @@
-"""One- and two-compartment pharmacokinetics with oral or IV bolus dosing and a
-sigmoid Emax PD model (direct, or delayed through an effect compartment).
+"""One- and two-compartment pharmacokinetics with oral, IV bolus, or IV infusion dosing
+and a sigmoid Emax PD model (direct, or delayed through an effect compartment).
 
 Units are fixed across the package: dose in mg, volume in L, clearance in L/h,
 rates in 1/h, time in h, concentration in mg/L.
@@ -9,7 +9,7 @@ the two-compartment model, in the peripheral compartment (A_p). Plasma
 concentration is C = A_c / V, with V the central volume (V1).
 
     dA_gut/dt = -ka * A_gut
-    dA_c/dt   =  ka * A_gut - elimination - distribution
+    dA_c/dt   =  ka * A_gut + R_inf(t) - elimination - distribution
     dA_p/dt   =  distribution                        (two-compartment only)
     distribution = Q * (A_c / V - A_p / V2)
     elimination = (CL / V) * A_c                     (linear)
@@ -18,12 +18,16 @@ concentration is C = A_c / V, with V the central volume (V1).
 Q is the intercompartmental clearance (L/h) and V2 the peripheral volume (L).
 Elimination always happens from the central compartment.
 
-Dosing route:
-    oral      each dose adds bioavailability * dose to A_gut, then absorbs with ka.
-    iv_bolus  each dose is injected straight into the central compartment (the
-              whole dose; ka and bioavailability play no part). Plasma
-              concentration then jumps at a dose time, and the value reported at
-              a dose time includes that dose.
+Dosing routes:
+    oral         each dose adds bioavailability * dose to A_gut at dose_time + tlag,
+                 then absorbs with rate ka.
+    iv_bolus     each dose is injected straight into the central compartment (the
+                 whole dose; ka, tlag and bioavailability play no part). Plasma
+                 concentration jumps at a dose time, and the value reported at
+                 a dose time includes that dose.
+    iv_infusion  each dose is infused into the central compartment at constant zero-order
+                 rate dose / infusion_duration over [t_dose, t_dose + infusion_duration).
+                 Overlapping infusions sum their rates.
 
 Effect, a sigmoid Emax model:
 
@@ -35,17 +39,6 @@ then the concentration at a hypothetical effect site that follows plasma with a
 lag:
 
     dCe/dt = ke0 * (C - Ce)
-
-The effect compartment is driven by plasma concentration and takes up a negligible
-amount of drug, so it does not change the PK. A large ke0 gives back the direct
-effect; a small ke0 gives a long delay (the equilibration half-life is ln2/ke0), and
-the effect-versus-concentration curve then shows hysteresis.
-
-Use a negative Emax for an inhibitory effect.
-
-Oral data alone cannot separate bioavailability F from the volumes and clearances,
-so with F = 1 a fitted V is really V/F (and CL, V2, Q are CL/F, V2/F, Q/F).
-IV bolus data do not have that problem.
 """
 from __future__ import annotations
 
@@ -58,12 +51,12 @@ from scipy.integrate import solve_ivp
 
 _trapezoid = getattr(np, "trapezoid", None) or np.trapz
 
-ROUTES = ("oral", "iv_bolus")
+ROUTES = ("oral", "iv_bolus", "iv_infusion")
 
 
 @dataclass(frozen=True)
 class PKParameters:
-    ka: float  # absorption rate constant, 1/h (ignored for IV bolus dosing)
+    ka: float  # absorption rate constant, 1/h (ignored for IV routes)
     volume: float  # central volume of distribution V (V1), L
     elimination: Literal["linear", "michaelis_menten"] = "linear"
     clearance: float | None = None  # L/h, linear elimination
@@ -132,7 +125,9 @@ class Regimen:
     interval: float = 0.0  # h between doses (needed when n_doses > 1)
     n_doses: int = 1
     start: float = 0.0  # time of the first dose, h
-    route: Literal["oral", "iv_bolus"] = "oral"
+    route: Literal["oral", "iv_bolus", "iv_infusion"] = "oral"
+    infusion_duration: float = 1.0  # h per dose (used when route == "iv_infusion")
+    tlag: float = 0.0  # absorption lag time, h (used when route == "oral")
 
     def __post_init__(self) -> None:
         if self.dose <= 0:
@@ -145,6 +140,10 @@ class Regimen:
             raise ValueError("start must not be negative")
         if self.route not in ROUTES:
             raise ValueError(f"route must be one of {ROUTES}")
+        if self.route == "iv_infusion" and (not math.isfinite(self.infusion_duration) or self.infusion_duration <= 0):
+            raise ValueError("infusion_duration must be positive for iv_infusion")
+        if not math.isfinite(self.tlag) or self.tlag < 0:
+            raise ValueError("tlag must not be negative")
 
     def dose_times(self) -> np.ndarray:
         return self.start + self.interval * np.arange(self.n_doses)
@@ -153,7 +152,7 @@ class Regimen:
 @dataclass
 class Simulation:
     t: np.ndarray
-    gut: np.ndarray  # amount in gut, mg (post-dose at a dose time; zero for IV bolus)
+    gut: np.ndarray  # amount in gut, mg (post-dose at an oral absorption time; zero for IV routes)
     central: np.ndarray  # amount in central compartment, mg
     conc: np.ndarray  # plasma concentration, mg/L
     effect: np.ndarray | None  # None when no effect parameters were given
@@ -191,12 +190,7 @@ def _elimination_clearance(params: PKParameters) -> float:
 
 
 def hybrid_rate_constants(params: PKParameters) -> tuple[float, float]:
-    """(alpha, beta) of a two-compartment model, alpha > beta, in 1/h.
-
-    They are the roots of s**2 - (k10 + k12 + k21) * s + k10 * k21 = 0 with
-    k10 = CL/V, k12 = Q/V, k21 = Q/V2. For Michaelis-Menten elimination they
-    describe the low-concentration limit (CL = Vmax/Km).
-    """
+    """(alpha, beta) of a two-compartment model, alpha > beta, in 1/h."""
     if params.compartments != 2:
         raise ValueError("hybrid rate constants need a two-compartment model")
     k10 = _elimination_clearance(params) / params.volume
@@ -208,10 +202,7 @@ def hybrid_rate_constants(params: PKParameters) -> tuple[float, float]:
 
 
 def half_lives(params: PKParameters) -> dict[str, float | None]:
-    """Terminal half-life, and the distribution half-life for a two-compartment model.
-
-    For Michaelis-Menten elimination the values describe the low-concentration tail.
-    """
+    """Terminal half-life, and the distribution half-life for a two-compartment model."""
     if params.compartments == 2:
         alpha, beta = hybrid_rate_constants(params)
         return {"terminal": math.log(2.0) / beta, "distribution": math.log(2.0) / alpha}
@@ -263,14 +254,7 @@ def simulate(
     times: np.ndarray,
     effect: EffectParameters | None = None,
 ) -> Simulation:
-    """Integrate the model and return the state at the requested times.
-
-    `times` (hours, any order) are evaluated as given; the integration always
-    starts at time 0 with an empty body. Doses are applied as instantaneous
-    additions (to the gut for oral dosing, to the central compartment for an IV
-    bolus); at a dose time the reported state includes that dose. With oral dosing
-    plasma concentration is continuous across doses, with an IV bolus it jumps.
-    """
+    """Integrate the model and return the state at the requested times."""
     times = np.asarray(times, dtype=float)
     if times.ndim != 1 or times.size == 0:
         raise ValueError("times must be a non-empty 1-D array")
@@ -281,58 +265,84 @@ def simulate(
     ts = times[order]
     t_end = float(ts[-1])
 
-    dose_times = regimen.dose_times()
-    dose_times = dose_times[dose_times <= t_end]
-    breaks = np.unique(np.concatenate(([0.0], dose_times, [t_end])))
-    iv = regimen.route == "iv_bolus"
-    amount = regimen.dose if iv else params.bioavailability * regimen.dose
-    target = 1 if iv else 0  # state that receives the dose
+    raw_doses = regimen.dose_times()
+    route = regimen.route
+
+    if route == "oral":
+        arrival_times = raw_doses + regimen.tlag
+        active_arrivals = arrival_times[arrival_times <= t_end]
+        breaks = np.unique(np.concatenate(([0.0], active_arrivals, [t_end])))
+        amount = params.bioavailability * regimen.dose
+        arrival_set = set(float(d) for d in active_arrivals)
+    elif route == "iv_bolus":
+        active_arrivals = raw_doses[raw_doses <= t_end]
+        breaks = np.unique(np.concatenate(([0.0], active_arrivals, [t_end])))
+        amount = regimen.dose
+        arrival_set = set(float(d) for d in active_arrivals)
+    else:  # iv_infusion
+        inf_starts = raw_doses[raw_doses <= t_end]
+        inf_stops = (raw_doses + regimen.infusion_duration)
+        inf_stops = inf_stops[inf_stops <= t_end]
+        breaks = np.unique(np.concatenate(([0.0], inf_starts, inf_stops, [t_end])))
+        amount = 0.0
+        arrival_set = set()
+        inf_rate_single = regimen.dose / regimen.infusion_duration
+        inf_end_times = raw_doses + regimen.infusion_duration
+
     pk_rhs = _rhs(params)
     n_pk = 3 if params.compartments == 2 else 2
     ke0 = effect.ke0 if effect is not None else None
-    if ke0 is None:
-        rhs = pk_rhs
-        n_states = n_pk
-    else:
-        # one extra state: the effect-site concentration Ce (mg/L), driven by C = A_c / V
-        n_states = n_pk + 1
-        volume = params.volume
+    volume = params.volume
+
+    def make_rhs(inf_rate: float):
+        if ke0 is None and inf_rate == 0.0:
+            return pk_rhs
 
         def rhs(t, y):
             d = pk_rhs(t, y[:n_pk])
-            d.append(ke0 * (max(y[1], 0.0) / volume - y[n_pk]))
+            if inf_rate != 0.0:
+                d[1] += inf_rate
+            if ke0 is not None:
+                d.append(ke0 * (max(y[1], 0.0) / volume - y[n_pk]))
             return d
 
+        return rhs
+
+    n_states = n_pk + (1 if ke0 is not None else 0)
     y = np.zeros(n_states)
     out = np.zeros((n_states, ts.size))
-    dose_set = set(float(d) for d in dose_times)
+    bolus_target = 1 if route == "iv_bolus" else 0
 
     if t_end == 0.0:
-        if 0.0 in dose_set:
-            y[target] += amount
+        if 0.0 in arrival_set:
+            y[bolus_target] += amount
         out[:, :] = y[:, None]
     else:
         for k in range(len(breaks) - 1):
             t0, t1 = float(breaks[k]), float(breaks[k + 1])
-            if t0 in dose_set:
-                y[target] += amount
+            if t0 in arrival_set:
+                y[bolus_target] += amount
+            if route == "iv_infusion":
+                t_mid = 0.5 * (t0 + t1)
+                n_active = int(np.sum((raw_doses <= t_mid) & (t_mid < inf_end_times)))
+                seg_rhs = make_rhs(n_active * inf_rate_single)
+            else:
+                seg_rhs = make_rhs(0.0)
             last = k == len(breaks) - 2
             mask = (ts >= t0) & ((ts <= t1) if last else (ts < t1))
             seg_times = ts[mask]
             eval_pts = np.unique(np.concatenate((seg_times, [t1])))
             sol = solve_ivp(
-                rhs, (t0, t1), y, t_eval=eval_pts, method="LSODA", rtol=1e-9, atol=1e-12
+                seg_rhs, (t0, t1), y, t_eval=eval_pts, method="LSODA", rtol=1e-9, atol=1e-12
             )
             if not sol.success:
                 raise RuntimeError(f"ODE solver failed: {sol.message}")
             idx = np.searchsorted(eval_pts, seg_times)
             out[:, mask] = sol.y[:, idx]
             y = sol.y[:, -1].copy()
-        if t_end in dose_set:
-            # a dose exactly at the end of the window: no segment starts there, so apply it
-            # to the points at that time here (the reported state includes the dose)
+        if t_end in arrival_set:
             final = y.copy()
-            final[target] += amount
+            final[bolus_target] += amount
             out[:, ts >= t_end] = final[:, None]
 
     inv = np.empty_like(order)

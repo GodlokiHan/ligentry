@@ -1,22 +1,4 @@
-"""Joint (simultaneous) pharmacokinetic and pharmacodynamic parameter fitting.
-
-Fits free PK parameters (ka, V, CL, Vmax, Km, V2, Q) and free PD parameters
-(E0, Emax, EC50, Hill, ke0) simultaneously against measured plasma concentrations
-and measured effects in a single nonlinear least-squares objective.
-
-Why joint fitting?
-Sequential fitting treats the predicted plasma concentration C(t) as noiseless
-truth during the PD step, ignoring PK uncertainty and preventing dense effect
-observations (especially around peak/hysteresis) from informing PK rate constants.
-Joint fitting optimizes the combined parameter vector theta = (theta_PK, theta_PD)
-and computes parameter standard errors and CV% from the full joint Jacobian.
-
-Relative scale balancing:
-Plasma concentration (mg/L) and effect (e.g. 0-100 % or delta mmHg) live on
-different numerical scales. Before the joint polish, an initial sequential pass
-estimates each dataset's residual scale (sigma_pk and sigma_pd) so both blocks
-contribute proportionally to their measurement precision.
-"""
+"""Joint (simultaneous) pharmacokinetic and pharmacodynamic parameter fitting."""
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
@@ -46,7 +28,7 @@ from ligentry.pkpd.model import (
     simulate,
 )
 
-_PK_LOG_PARAMS = PK_FITTABLE
+_PK_LOG_PARAMS = tuple(n for n in PK_FITTABLE if n != "tlag")
 _PD_LOG_PARAMS = ("ec50", "hill", "ke0")
 
 
@@ -69,6 +51,7 @@ class JointFitResult:
     success: bool
     message: str
     route: str = "oral"
+    regimen: Regimen | None = None
 
 
 def fit_joint_pkpd(
@@ -111,12 +94,16 @@ def fit_joint_pkpd(
     for name in free_pk:
         if name not in PK_FITTABLE:
             raise ValueError(f"cannot fit PK parameter '{name}'")
-        if getattr(start_pk, name) is None:
+        if name != "tlag" and getattr(start_pk, name) is None:
             raise ValueError(
                 f"'{name}' has no starting value (not applicable to {start_pk.elimination} elimination)"
             )
-    if regimen.route == "iv_bolus" and "ka" in free_pk:
-        raise ValueError("ka does not apply to IV bolus dosing, so it cannot be fitted")
+    if regimen.route in ("iv_bolus", "iv_infusion"):
+        for invalid in ("ka", "tlag"):
+            if invalid in free_pk:
+                raise ValueError(
+                    f"{invalid} does not apply to {regimen.route} dosing, so it cannot be fitted"
+                )
 
     for name in free_pd:
         if name not in EFFECT_FITTABLE:
@@ -129,6 +116,7 @@ def fit_joint_pkpd(
 
     # Stage 1: warm-start & residual scale estimation via fast sequential pass
     init_pk = start_pk
+    init_reg = regimen
     if not use_form_start:
         try:
             seq_pk = fit_concentration(
@@ -136,10 +124,13 @@ def fit_joint_pkpd(
                 free=free_pk, weighting=weighting, bounds=pk_bounds, max_nfev=250,
             )
             init_pk = seq_pk.params
+            if seq_pk.regimen is not None:
+                init_reg = seq_pk.regimen
         except Exception:
             init_pk = start_pk
+            init_reg = regimen
 
-    plasma_pd_init = simulate(init_pk, regimen, pd_times).conc
+    plasma_pd_init = simulate(init_pk, init_reg, pd_times).conc
     c_max = float(plasma_pd_init.max())
     if c_max <= 0.0:
         raise ValueError(
@@ -149,7 +140,7 @@ def fit_joint_pkpd(
 
     delayed = "ke0" in free_pd or (start_effect is not None and start_effect.ke0 is not None)
     site_fn = (
-        (lambda k: effect_site_concentration(init_pk, regimen, pd_times, k)) if delayed else None
+        (lambda k: effect_site_concentration(init_pk, init_reg, pd_times, k)) if delayed else None
     )
 
     if start_effect is None:
@@ -187,7 +178,7 @@ def fit_joint_pkpd(
     else:
         pk_point_scale = np.ones_like(pk_conc)
 
-    pk_pred_init = simulate(init_pk, regimen, pk_times).conc
+    pk_pred_init = simulate(init_pk, init_reg, pk_times).conc
     pk_w_res = (pk_pred_init - pk_conc) / pk_point_scale
     dof_pk = max(1, pk_times.size - len(free_pk))
     sigma_pk = float(np.sqrt(np.sum(pk_w_res**2) / dof_pk))
@@ -195,9 +186,9 @@ def fit_joint_pkpd(
         sigma_pk = 0.05 if weighting == "proportional" else max(1e-3, 0.02 * float(pk_conc.max()))
 
     if delayed:
-        drive_init = effect_site_concentration(init_pk, regimen, pd_times, init_eff.ke0)
+        drive_init = effect_site_concentration(init_pk, init_reg, pd_times, init_eff.ke0)
     else:
-        drive_init = simulate(init_pk, regimen, pd_times).conc
+        drive_init = simulate(init_pk, init_reg, pd_times).conc
     pd_pred_init = effect_from_conc(drive_init, init_eff)
     dof_pd = max(1, pd_times.size - len(free_pd))
     sigma_pd = float(np.sqrt(np.sum((pd_pred_init - pd_effect) ** 2) / dof_pd))
@@ -205,13 +196,20 @@ def fit_joint_pkpd(
     if not np.isfinite(sigma_pd) or sigma_pd <= 1e-8:
         sigma_pd = max(1e-3, 0.02 * (eff_span if eff_span > 0 else 1.0))
 
-    # Build unified parameter vector x = [log(free_pk)..., free_pd_transformed...]
+    max_tlag = float(regimen.interval) if regimen.n_doses > 1 else max(float(pk_times.max()), 1.0)
     pk_lower = np.full(len(free_pk), -np.inf)
     pk_upper = np.full(len(free_pk), np.inf)
+    for i, name in enumerate(free_pk):
+        if name == "tlag":
+            pk_lower[i], pk_upper[i] = 0.0, max_tlag
+
     for name, (lo, hi) in (pk_bounds or {}).items():
         if name in free_pk:
             i = free_pk.index(name)
-            pk_lower[i], pk_upper[i] = np.log(lo), np.log(hi)
+            if name == "tlag":
+                pk_lower[i], pk_upper[i] = float(lo), float(hi)
+            else:
+                pk_lower[i], pk_upper[i] = np.log(lo), np.log(hi)
 
     pd_limits: dict[str, tuple[float, float]] = {
         "e0": (-np.inf, np.inf),
@@ -238,7 +236,17 @@ def fit_joint_pkpd(
         [to_pd_x(n, pd_limits[n][1]) if np.isfinite(pd_limits[n][1]) else np.inf for n in free_pd]
     )
 
-    x0_pk = np.log([float(getattr(init_pk, n)) for n in free_pk])
+    x0_pk_list: list[float] = []
+    for n in free_pk:
+        if n == "tlag":
+            val = float(init_reg.tlag)
+            if val <= 0.0:
+                pos_t = pk_times[pk_times > 0]
+                val = min(0.5 * float(pos_t[0]) if pos_t.size else 0.1, 0.5 * max_tlag)
+            x0_pk_list.append(val)
+        else:
+            x0_pk_list.append(float(np.log(float(getattr(init_pk, n)))))
+    x0_pk = np.array(x0_pk_list, dtype=float)
     x0_pd = np.array([to_pd_x(n, float(getattr(init_eff, n))) for n in free_pd])
     lower = np.concatenate([pk_lower, pd_lower])
     upper = np.concatenate([pk_upper, pd_upper])
@@ -253,9 +261,16 @@ def fit_joint_pkpd(
         if n not in free_pd and getattr(init_eff, n) is not None
     }
 
-    def unpack(x: np.ndarray) -> tuple[PKParameters, EffectParameters]:
-        pk_vals = {n: float(np.exp(v)) for n, v in zip(free_pk, x[:n_pk])}
-        pk_obj = replace(init_pk, **pk_vals)
+    def unpack(x: np.ndarray) -> tuple[PKParameters, Regimen, EffectParameters]:
+        pk_vals = {}
+        reg_vals = {}
+        for n, v in zip(free_pk, x[:n_pk]):
+            if n == "tlag":
+                reg_vals["tlag"] = max(0.0, float(v))
+            else:
+                pk_vals[n] = float(np.exp(v))
+        pk_obj = replace(init_pk, **pk_vals) if pk_vals else init_pk
+        reg_obj = replace(init_reg, **reg_vals) if reg_vals else init_reg
 
         pd_vals = dict(fixed_pd)
         for n, v in zip(free_pd, x[n_pk:]):
@@ -267,16 +282,15 @@ def fit_joint_pkpd(
             hill=pd_vals["hill"],
             ke0=pd_vals.get("ke0"),
         )
-        return pk_obj, eff_obj
+        return pk_obj, reg_obj, eff_obj
 
-    # Precompute union of observation times when possible to avoid redundant ODE solves
     all_times, inv_idx = np.unique(np.concatenate([pk_times, pd_times]), return_inverse=True)
     pk_idx = inv_idx[: pk_times.size]
     pd_idx = inv_idx[pk_times.size :]
 
     def joint_residuals(x: np.ndarray) -> np.ndarray:
-        pk_obj, eff_obj = unpack(x)
-        sim = simulate(pk_obj, regimen, all_times, eff_obj)
+        pk_obj, reg_obj, eff_obj = unpack(x)
+        sim = simulate(pk_obj, reg_obj, all_times, eff_obj)
         r_pk = (sim.conc[pk_idx] - pk_conc) / (pk_point_scale * sigma_pk)
         r_pd = (sim.effect[pd_idx] - pd_effect) / sigma_pd
         return np.concatenate([r_pk, r_pd])
@@ -291,9 +305,9 @@ def fit_joint_pkpd(
         x_scale="jac",
         diff_step=1e-6,
     )
-    fitted_pk, fitted_eff = unpack(sol.x)
+    fitted_pk, fitted_reg, fitted_eff = unpack(sol.x)
 
-    sim_final = simulate(fitted_pk, regimen, all_times, fitted_eff)
+    sim_final = simulate(fitted_pk, fitted_reg, all_times, fitted_eff)
     pk_rmse = float(np.sqrt(np.mean((sim_final.conc[pk_idx] - pk_conc) ** 2)))
     pd_rmse = float(np.sqrt(np.mean((sim_final.effect[pd_idx] - pd_effect) ** 2)))
 
@@ -310,6 +324,12 @@ def fit_joint_pkpd(
         )
     )
 
+    pk_estimates = {
+        n: (float(fitted_reg.tlag) if n == "tlag" else float(getattr(fitted_pk, n)))
+        for n in free_pk
+    }
+    pd_estimates = {n: float(getattr(fitted_eff, n)) for n in free_pd}
+
     all_free = free_pk + free_pd
     se: dict[str, float] | None = None
     cv: dict[str, float | None] | None = None
@@ -317,8 +337,8 @@ def fit_joint_pkpd(
     if dof > 0:
         s2 = float(np.sum(sol.fun**2) / dof)
         cov_x = s2 * np.linalg.pinv(sol.jac.T @ sol.jac)
-        native_vals = {n: float(getattr(fitted_pk, n)) for n in free_pk}
-        native_vals.update({n: float(getattr(fitted_eff, n)) for n in free_pd})
+        native_vals = dict(pk_estimates)
+        native_vals.update(pd_estimates)
         log_set = set(_PK_LOG_PARAMS) | set(_PD_LOG_PARAMS)
         scale = np.array([native_vals[n] if n in log_set else 1.0 for n in all_free])
         cov = cov_x * np.outer(scale, scale)
@@ -333,8 +353,8 @@ def fit_joint_pkpd(
         effect=fitted_eff,
         free_pk=free_pk,
         free_pd=free_pd,
-        pk_estimates={n: float(getattr(fitted_pk, n)) for n in free_pk},
-        pd_estimates={n: float(getattr(fitted_eff, n)) for n in free_pd},
+        pk_estimates=pk_estimates,
+        pd_estimates=pd_estimates,
         se=se,
         cv_percent=cv,
         at_bound_pd=at_bound_pd,
@@ -346,4 +366,5 @@ def fit_joint_pkpd(
         success=bool(sol.success),
         message=str(sol.message),
         route=regimen.route,
+        regimen=fitted_reg,
     )

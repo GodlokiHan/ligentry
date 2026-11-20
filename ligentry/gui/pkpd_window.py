@@ -53,19 +53,20 @@ from ligentry.pkpd.observations import Observations, ObservationError, load_obse
 from ligentry.pkpd.residuals import Residuals, residuals_for
 
 _INTRO = (
-    "One- or two-compartment model with oral or IV bolus dosing and an Emax effect, "
-    "direct or delayed through an effect compartment. It is a teaching and exploration "
+    "One- or two-compartment model with oral, IV bolus, or IV infusion dosing and an Emax "
+    "effect, direct or delayed through an effect compartment. It is a teaching and exploration "
     "tool: results are only as good as the parameters you enter, and nothing here is "
     "dosing advice."
 )
-_PARAMETER_BOXES = (  # fit checkbox label, parameter name
-    ("ka", "ka"),
-    ("V", "volume"),
-    ("CL", "clearance"),
-    ("Vmax", "vmax"),
-    ("Km", "km"),
-    ("V2", "peripheral_volume"),
-    ("Q", "intercompartmental_clearance"),
+_PARAMETER_BOXES = (  # fit checkbox label, parameter name, ticked by default
+    ("ka", "ka", True),
+    ("V", "volume", True),
+    ("CL", "clearance", True),
+    ("Vmax", "vmax", True),
+    ("Km", "km", True),
+    ("V2", "peripheral_volume", True),
+    ("Q", "intercompartmental_clearance", True),
+    ("Tlag", "tlag", False),
 )
 _EFFECT_BOXES = (  # fit checkbox label, parameter name, ticked by default
     ("E0", "e0", True),
@@ -102,17 +103,29 @@ class PKPDWindow(QMainWindow):
         self.route_combo = QComboBox()
         self.route_combo.addItem("Oral", workflow.ORAL)
         self.route_combo.addItem("IV bolus", workflow.IV_BOLUS)
+        self.route_combo.addItem("IV infusion", workflow.IV_INFUSION)
         self.route_combo.setToolTip(
-            "Oral doses are absorbed with rate ka. An IV bolus goes straight into the central "
-            "compartment: ka and bioavailability then do not apply."
+            "Oral doses are absorbed with rate ka after optional lag time Tlag. An IV bolus goes "
+            "straight into the central compartment at once. An IV infusion delivers each dose at "
+            "a constant rate over the infusion duration."
         )
         self.route_combo.currentIndexChanged.connect(self._structure_changed)
+        self.infusion_spin = self._spin(d.infusion_duration, 0.01, 1e4, 3, " h")
+        self.infusion_spin.setToolTip(
+            "Duration of each IV infusion (rate = dose / duration). Used only for IV infusion."
+        )
+        self.tlag_spin = self._spin(d.tlag, 0.0, 1e4, 3, " h")
+        self.tlag_spin.setToolTip(
+            "Delay between oral administration and the start of absorption (Tlag). Used only for oral dosing."
+        )
         dosing = QGroupBox("Dosing")
         form = QFormLayout(dosing)
         form.addRow("Route", self.route_combo)
         form.addRow("Dose", self.dose_spin)
         form.addRow("Number of doses", self.n_spin)
         form.addRow("Interval between doses", self.interval_spin)
+        form.addRow("Infusion duration", self.infusion_spin)
+        form.addRow("Oral lag time Tlag", self.tlag_spin)
 
         # ---- pharmacokinetics ----------------------------------------------------------
         self.ka_spin = self._spin(d.ka, 0.001, 100.0, 4, " 1/h")
@@ -209,9 +222,9 @@ class PKPDWindow(QMainWindow):
 
         self.free_boxes: dict[str, QCheckBox] = {}
         free_row = QHBoxLayout()
-        for label, name in _PARAMETER_BOXES:
+        for label, name, ticked in _PARAMETER_BOXES:
             box = QCheckBox(label)
-            box.setChecked(True)
+            box.setChecked(ticked)
             self.free_boxes[name] = box
             free_row.addWidget(box)
         self.weight_combo = QComboBox()
@@ -422,19 +435,24 @@ class PKPDWindow(QMainWindow):
     def _structure_changed(self, *_args) -> None:
         """Enable only the boxes that apply to the chosen route, compartments and elimination."""
         linear = self.elim_combo.currentData() == workflow.LINEAR
-        oral = self.route_combo.currentData() == workflow.ORAL
+        route = self.route_combo.currentData()
+        oral = route == workflow.ORAL
+        infusion = route == workflow.IV_INFUSION
         two = self.comp_combo.currentData() == 2
         self.clearance_spin.setEnabled(linear)
         self.vmax_spin.setEnabled(not linear)
         self.km_spin.setEnabled(not linear)
         self.ka_spin.setEnabled(oral)
         self.f_spin.setEnabled(oral)
+        self.tlag_spin.setEnabled(oral)
+        self.infusion_spin.setEnabled(infusion)
         self.volume2_spin.setEnabled(two)
         self.q_spin.setEnabled(two)
         self.free_boxes["clearance"].setEnabled(linear)
         self.free_boxes["vmax"].setEnabled(not linear)
         self.free_boxes["km"].setEnabled(not linear)
         self.free_boxes["ka"].setEnabled(oral)
+        self.free_boxes["tlag"].setEnabled(oral)
         self.free_boxes["peripheral_volume"].setEnabled(two)
         self.free_boxes["intercompartmental_clearance"].setEnabled(two)
         self.schedule_update()
@@ -474,6 +492,8 @@ class PKPDWindow(QMainWindow):
             intercompartmental_clearance=self.q_spin.value(),
             delayed_effect=self.delayed_check.isChecked(),
             ke0=self.ke0_spin.value(),
+            infusion_duration=self.infusion_spin.value(),
+            tlag=self.tlag_spin.value(),
         )
 
     def set_inputs(self, inputs: workflow.ModelInputs) -> None:
@@ -498,6 +518,8 @@ class PKPDWindow(QMainWindow):
         self.q_spin.setValue(inputs.intercompartmental_clearance)
         self.ke0_spin.setValue(inputs.ke0)
         self.delayed_check.setChecked(inputs.delayed_effect)
+        self.infusion_spin.setValue(inputs.infusion_duration)
+        self.tlag_spin.setValue(inputs.tlag)
         self.schedule_update()
 
     # ---- simulate and draw ---------------------------------------------------------------
@@ -522,7 +544,7 @@ class PKPDWindow(QMainWindow):
         self.last_result = result
 
         if self.auto_time.isChecked():
-            self.tend_spin.blockSignals(True)  # showing the automatic value must not re-trigger
+            self.tend_spin.blockSignals(True)
             self.tend_spin.setValue(result.t_end)
             self.tend_spin.blockSignals(False)
 
@@ -792,7 +814,6 @@ class PKPDWindow(QMainWindow):
         fitted = self.last_effect_fit.effect
         self.set_inputs(effect_workflow.apply_effect_fit(self.gather_inputs(), self.last_effect_fit))
 
-        # the boxes have fixed ranges and decimals: say so if a fitted value did not fit in them
         shown = self.gather_inputs()
         clipped = []
         spins = dict(self._effect_spins)

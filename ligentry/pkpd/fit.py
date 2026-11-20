@@ -1,17 +1,11 @@
 """Fit pharmacokinetic parameters to measured plasma concentrations.
 
-Parameters are fitted on a log scale, so they always stay positive. With oral
-data, ka and the elimination rate can trade places and still fit the curve
-equally well (the "flip-flop" problem), so give a starting guess that is
-physically sensible, and use `bounds` (for example a lower bound on ka) when
-the absorption is known to be faster than the elimination.
+Parameters (except non-negative oral lag time tlag) are fitted on a log scale,
+so they always stay positive. With oral data, ka and the elimination rate can
+trade places and still fit the curve equally well (the "flip-flop" problem), so
+give a starting guess that is physically sensible, and use `bounds` when needed.
 
-For a two-compartment model the peripheral volume and the intercompartmental
-clearance can be fitted as well. They are only well determined when the data
-include several samples from the early, rapidly falling distribution phase, and
-IV bolus data determine them far better than oral data, where the absorption
-phase hides the distribution phase. ka does not apply to IV bolus dosing and
-cannot be fitted there.
+ka and tlag do not apply to IV bolus or IV infusion dosing and cannot be fitted there.
 """
 from __future__ import annotations
 
@@ -23,12 +17,18 @@ from scipy.optimize import least_squares
 from ligentry.pkpd.model import PKParameters, Regimen, simulate
 
 FITTABLE = (
-    "ka", "volume", "clearance", "vmax", "km", "peripheral_volume", "intercompartmental_clearance",
+    "ka",
+    "volume",
+    "clearance",
+    "vmax",
+    "km",
+    "peripheral_volume",
+    "intercompartmental_clearance",
+    "tlag",
 )
+_LINEAR_PK_PARAMS = ("tlag",)
 WEIGHTINGS = ("none", "proportional")
 
-# Proportional weights divide by max(observed, this fraction of the largest observed
-# concentration), so near-zero samples cannot dominate the fit.
 _WEIGHT_FLOOR = 0.05
 
 
@@ -37,12 +37,13 @@ class FitResult:
     params: PKParameters
     free: tuple[str, ...]
     estimates: dict[str, float]
-    cv_percent: dict[str, float] | None  # None when there are no spare degrees of freedom
+    cv_percent: dict[str, float | None] | None  # None when there are no spare degrees of freedom
     rmse: float  # root-mean-square error in concentration units (mg/L)
     n_obs: int
     success: bool
     message: str
     route: str = "oral"  # dosing route the fit was made with
+    regimen: Regimen | None = None  # updated regimen (carries fitted tlag if fitted)
 
 
 def fit_concentration(
@@ -69,24 +70,46 @@ def fit_concentration(
     for name in free:
         if name not in FITTABLE:
             raise ValueError(f"cannot fit '{name}'; choose from {FITTABLE}")
-        if getattr(start_params, name) is None:
+        if name != "tlag" and getattr(start_params, name) is None:
             raise ValueError(
                 f"'{name}' has no starting value (it does not apply to "
                 f"{start_params.elimination} elimination)"
             )
-    if regimen.route == "iv_bolus" and "ka" in free:
-        raise ValueError("ka does not apply to IV bolus dosing, so it cannot be fitted")
+    if regimen.route in ("iv_bolus", "iv_infusion"):
+        for invalid in ("ka", "tlag"):
+            if invalid in free:
+                raise ValueError(
+                    f"{invalid} does not apply to {regimen.route} dosing, so it cannot be fitted"
+                )
     if times.size < len(free):
         raise ValueError(f"{times.size} observations cannot determine {len(free)} parameters")
 
+    max_tlag = float(regimen.interval) if regimen.n_doses > 1 else max(float(times.max()), 1.0)
     lower = np.full(len(free), -np.inf)
     upper = np.full(len(free), np.inf)
+    for i, name in enumerate(free):
+        if name == "tlag":
+            lower[i], upper[i] = 0.0, max_tlag
+
     for name, (lo, hi) in (bounds or {}).items():
         if name in free:
             i = free.index(name)
-            lower[i], upper[i] = np.log(lo), np.log(hi)
+            if name in _LINEAR_PK_PARAMS:
+                lower[i], upper[i] = float(lo), float(hi)
+            else:
+                lower[i], upper[i] = np.log(lo), np.log(hi)
 
-    x0 = np.log([float(getattr(start_params, n)) for n in free])
+    x0_list: list[float] = []
+    for name in free:
+        if name == "tlag":
+            val = float(regimen.tlag)
+            if val <= 0.0:
+                positive_t = times[times > 0]
+                val = min(0.5 * float(positive_t[0]) if positive_t.size else 0.1, 0.5 * max_tlag)
+            x0_list.append(val)
+        else:
+            x0_list.append(float(np.log(float(getattr(start_params, name)))))
+    x0 = np.array(x0_list, dtype=float)
     x0 = np.clip(x0, lower + 1e-9, upper - 1e-9)
 
     if weighting == "proportional":
@@ -94,32 +117,57 @@ def fit_concentration(
     else:
         scale = np.ones_like(conc)
 
-    def make(x: np.ndarray) -> PKParameters:
-        return replace(start_params, **{n: float(np.exp(v)) for n, v in zip(free, x)})
+    def make(x: np.ndarray) -> tuple[PKParameters, Regimen]:
+        pk_updates = {}
+        reg_updates = {}
+        for n, v in zip(free, x):
+            if n == "tlag":
+                reg_updates["tlag"] = max(0.0, float(v))
+            else:
+                pk_updates[n] = float(np.exp(v))
+        pk_obj = replace(start_params, **pk_updates) if pk_updates else start_params
+        reg_obj = replace(regimen, **reg_updates) if reg_updates else regimen
+        return pk_obj, reg_obj
 
     def residuals(x: np.ndarray) -> np.ndarray:
-        return (simulate(make(x), regimen, times).conc - conc) / scale
+        pk_obj, reg_obj = make(x)
+        return (simulate(pk_obj, reg_obj, times).conc - conc) / scale
 
-    sol = least_squares(residuals, x0, bounds=(lower, upper), max_nfev=max_nfev, x_scale=1.0)
-    fitted = make(sol.x)
-    pred = simulate(fitted, regimen, times).conc
+    kwargs = {"diff_step": 1e-6} if "tlag" in free else {}
+    sol = least_squares(
+        residuals, x0, bounds=(lower, upper), max_nfev=max_nfev, x_scale=1.0, **kwargs
+    )
+    fitted, fitted_reg = make(sol.x)
+    pred = simulate(fitted, fitted_reg, times).conc
     rmse = float(np.sqrt(np.mean((pred - conc) ** 2)))
 
-    cv = None
+    estimates: dict[str, float] = {}
+    for n in free:
+        estimates[n] = float(fitted_reg.tlag) if n == "tlag" else float(getattr(fitted, n))
+
+    cv: dict[str, float | None] | None = None
     dof = times.size - len(free)
     if dof > 0:
         s2 = float(np.sum(sol.fun**2) / dof)
         cov = s2 * np.linalg.pinv(sol.jac.T @ sol.jac)
-        cv = {n: float(100.0 * np.sqrt(max(cov[i, i], 0.0))) for i, n in enumerate(free)}
+        cv = {}
+        for i, n in enumerate(free):
+            sd = float(np.sqrt(max(cov[i, i], 0.0)))
+            if n in _LINEAR_PK_PARAMS:
+                est = estimates[n]
+                cv[n] = None if est == 0.0 else float(100.0 * sd / abs(est))
+            else:
+                cv[n] = float(100.0 * sd)
 
     return FitResult(
         params=fitted,
         free=free,
-        estimates={n: float(getattr(fitted, n)) for n in free},
+        estimates=estimates,
         cv_percent=cv,
         rmse=rmse,
         n_obs=int(times.size),
         success=bool(sol.success),
         message=str(sol.message),
         route=regimen.route,
+        regimen=fitted_reg,
     )
