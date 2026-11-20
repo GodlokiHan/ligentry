@@ -17,8 +17,11 @@ DEFAULT_GPU_PACK_URL = os.environ.get(
     "LIGENTRY_GPU_MODEL_URL",
     "https://github.com/GodlokiHan/ligentry/releases/download/models-v1/ligentry-rescore-gpu-v1.tar.gz",
 )
-# Optional expected SHA-256 of the downloaded archive (set once published to GitHub Releases)
-DEFAULT_GPU_PACK_SHA256 = os.environ.get("LIGENTRY_GPU_MODEL_SHA256", "")
+# Expected SHA-256 of the downloaded archive
+DEFAULT_GPU_PACK_SHA256 = os.environ.get(
+    "LIGENTRY_GPU_MODEL_SHA256",
+    "b797513d97d3a1555d98be7b206aec219b602a49342c105ee7028c1bc9dec365",
+)
 
 
 @dataclass(frozen=True)
