@@ -3,7 +3,7 @@ concentrations and effects, and fit the model parameters.
 
 This module only gathers numbers from the widgets and draws results. All the
 modelling lives in ligentry.pkpd (workflow.py, model.py, fit.py, observations.py,
-effect_*.py), which is tested without Qt.
+effect_*.py, joint_*.py), which is tested without Qt.
 
 Run it on its own with:  python -m ligentry.gui.pkpd_window
 """
@@ -46,7 +46,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolb
 from matplotlib.figure import Figure
 
 from ligentry.gui import help_menu
-from ligentry.pkpd import effect_workflow, workflow
+from ligentry.pkpd import effect_workflow, joint_workflow, workflow
 from ligentry.pkpd.effect_data import EffectObservations, load_effect_observations
 from ligentry.pkpd.effect_residuals import effect_residuals_for
 from ligentry.pkpd.observations import Observations, ObservationError, load_observations
@@ -87,6 +87,7 @@ class PKPDWindow(QMainWindow):
         self.last_result: workflow.SimulationResult | None = None
         self.last_fit = None
         self.last_effect_fit = None
+        self.last_joint_fit = None
         self.last_dir = Path.home()
 
         d = workflow.ModelInputs()
@@ -311,6 +312,35 @@ class PKPDWindow(QMainWindow):
         lay.addWidget(self.eff_table)
         lay.addWidget(self.eff_info)
 
+        # ---- joint PK + PD fitting -------------------------------------------------------------
+        self.joint_fit_btn = QPushButton("Fit PK + PD jointly")
+        self.joint_fit_btn.setEnabled(False)
+        self.joint_fit_btn.setToolTip(
+            "Simultaneously fit all ticked PK and PD parameters against both concentration "
+            "and effect data, propagating PK uncertainty into PD estimates."
+        )
+        self.joint_fit_btn.clicked.connect(self.fit_joint_clicked)
+        self.joint_apply_btn = QPushButton("Use joint fitted values")
+        self.joint_apply_btn.setEnabled(False)
+        self.joint_apply_btn.clicked.connect(self.apply_joint_fit_clicked)
+        joint_row = QHBoxLayout()
+        joint_row.addWidget(self.joint_fit_btn)
+        joint_row.addWidget(self.joint_apply_btn)
+
+        self.joint_table = QTableWidget(0, 4)
+        self.joint_table.setHorizontalHeaderLabels(["Parameter", "Estimate", "Unit", "Uncertainty"])
+        self.joint_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.joint_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.joint_table.setMaximumHeight(160)
+        self.joint_info = QLabel("Load both concentration and effect data to enable joint fitting.")
+        self.joint_info.setWordWrap(True)
+
+        joint_box = QGroupBox("Joint PK + PD fitting")
+        jlay = QVBoxLayout(joint_box)
+        jlay.addLayout(joint_row)
+        jlay.addWidget(self.joint_table)
+        jlay.addWidget(self.joint_info)
+
         self.export_btn = QPushButton("Export simulation CSV...")
         self.export_btn.clicked.connect(self.export_csv)
 
@@ -319,8 +349,10 @@ class PKPDWindow(QMainWindow):
         intro.setWordWrap(True)
         left = QWidget()
         left_lay = QVBoxLayout(left)
-        for w in (intro, dosing, pk_box, self.effect_box, time_box, self.metrics_label,
-                  self.status_label, data_box, eff_box, self.export_btn):
+        for w in (
+            intro, dosing, pk_box, self.effect_box, time_box, self.metrics_label,
+            self.status_label, data_box, eff_box, joint_box, self.export_btn,
+        ):
             left_lay.addWidget(w)
         left_lay.addStretch(1)
         scroll = QScrollArea()
@@ -373,6 +405,19 @@ class PKPDWindow(QMainWindow):
 
     def schedule_update(self, *_args) -> None:
         self._timer.start()
+
+    def _update_joint_availability(self) -> None:
+        both = (
+            self.obs is not None
+            and len(self.obs) > 0
+            and self.eff_obs is not None
+            and len(self.eff_obs) > 0
+        )
+        self.joint_fit_btn.setEnabled(both)
+        if not both and self.last_joint_fit is None:
+            self.joint_info.setText(
+                "Load both concentration and effect data to enable joint fitting."
+            )
 
     def _structure_changed(self, *_args) -> None:
         """Enable only the boxes that apply to the chosen route, compartments and elimination."""
@@ -613,6 +658,8 @@ class PKPDWindow(QMainWindow):
         self.data_label.setText(f"{Path(path).name}: {len(obs)} points")
         self.fit_btn.setEnabled(True)
         self._reset_fit_display()
+        self._reset_joint_fit_display()
+        self._update_joint_availability()
         self.schedule_update()
 
     def clear_data(self) -> None:
@@ -620,6 +667,8 @@ class PKPDWindow(QMainWindow):
         self.data_label.setText("No data loaded")
         self.fit_btn.setEnabled(False)
         self._reset_fit_display()
+        self._reset_joint_fit_display()
+        self._update_joint_availability()
         self.schedule_update()
 
     def _reset_fit_display(self) -> None:
@@ -684,6 +733,8 @@ class PKPDWindow(QMainWindow):
         self.eff_data_label.setText(f"{Path(path).name}: {len(eff_obs)} points")
         self.eff_fit_btn.setEnabled(True)
         self._reset_effect_fit_display()
+        self._reset_joint_fit_display()
+        self._update_joint_availability()
         self.schedule_update()
 
     def clear_effect_data(self) -> None:
@@ -691,6 +742,8 @@ class PKPDWindow(QMainWindow):
         self.eff_data_label.setText("No effect data loaded")
         self.eff_fit_btn.setEnabled(False)
         self._reset_effect_fit_display()
+        self._reset_joint_fit_display()
+        self._update_joint_availability()
         self.schedule_update()
 
     def _reset_effect_fit_display(self) -> None:
@@ -757,6 +810,64 @@ class PKPDWindow(QMainWindow):
                 + "\nThe box limits changed these values when they were copied: "
                 + "; ".join(clipped) + "."
             )
+
+    # ---- joint PK + PD fitting ---------------------------------------------------------------
+
+    def _reset_joint_fit_display(self) -> None:
+        self.last_joint_fit = None
+        self.joint_table.setRowCount(0)
+        self.joint_info.setText("")
+        self.joint_apply_btn.setEnabled(False)
+
+    def fit_joint_clicked(self) -> None:
+        if self.obs is None or self.eff_obs is None:
+            return
+        free_pk = [n for n, box in self.free_boxes.items() if box.isEnabled() and box.isChecked()]
+        free_pd = [n for n, box in self.eff_free_boxes.items() if box.isChecked()]
+        if self.eff_ke0_box.isChecked():
+            free_pd.append("ke0")
+        if not free_pk or not free_pd:
+            QMessageBox.information(
+                self, "ligentry", "Tick at least one PK parameter and one effect parameter to fit."
+            )
+            return
+
+        inputs = self.gather_inputs()
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            result, drive = joint_workflow.run_joint_fit(
+                inputs,
+                self.obs,
+                self.eff_obs,
+                free_pk=free_pk,
+                free_pd=free_pd,
+                weighting=self.weight_combo.currentData(),
+                use_form_start=self.eff_form_start.isChecked(),
+            )
+        except _FIT_ERRORS as exc:
+            QMessageBox.warning(self, "ligentry", f"The joint fit could not be done:\n{exc}")
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        self.last_joint_fit = result
+        rows = joint_workflow.joint_fit_table_rows(result)
+        self.joint_table.setRowCount(len(rows))
+        for i, row in enumerate(rows):
+            for j, text in enumerate(row):
+                self.joint_table.setItem(i, j, QTableWidgetItem(text))
+        notes = joint_workflow.joint_fit_notes(result, drive)
+        self.joint_info.setText(
+            f"PK RMSE {result.pk_rmse:.4g} mg/L ({result.n_pk_obs} pts), "
+            f"PD RMSE {result.pd_rmse:.4g} ({result.n_pd_obs} pts)."
+            + ("\n" + "\n".join(notes) if notes else "")
+        )
+        self.joint_apply_btn.setEnabled(True)
+
+    def apply_joint_fit_clicked(self) -> None:
+        if self.last_joint_fit is None:
+            return
+        self.set_inputs(joint_workflow.apply_joint_fit(self.gather_inputs(), self.last_joint_fit))
 
     def export_csv(self) -> None:
         if self.last_result is None:

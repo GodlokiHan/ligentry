@@ -1,6 +1,6 @@
 # Ligentry
 
-Open-source desktop app for computational drug design: GPU-accelerated molecular docking with an AI neural pose rescorer, an interactive 3D viewer, and a built-in validation benchmark, plus a pharmacokinetic/pharmacodynamic (PK/PD) simulator, a built-in manual with a first-launch guide, and a small browser for looking up papers and databases. Protein-structure work is planned.
+Open-source desktop app for computational drug design: GPU-accelerated molecular docking with an AI neural pose rescorer, an interactive 3D viewer, and a built-in validation benchmark, plus a pharmacokinetic/pharmacodynamic (PK/PD) simulator with sequential and simultaneous (joint) fitting, a built-in manual with a first-launch guide, and a small browser for looking up papers and databases. Protein-structure work is planned.
 
 **Status: early (v0.1.0).** Linux only for now. Windows is not supported yet.
 
@@ -27,7 +27,7 @@ Open-source desktop app for computational drug design: GPU-accelerated molecular
 - Linear (clearance) or Michaelis-Menten elimination, with either number of compartments.
 - Half-lives reported for the current parameters: terminal and distribution half-life for two compartments, terminal only for one.
 - Sigmoid Emax effect model (a negative Emax models inhibition), either **direct** (the effect follows the plasma concentration at once) or **delayed** through an effect compartment: the effect follows a hypothetical effect-site concentration Ce that lags plasma, dCe/dt = ke0 (C - Ce). The delay is described by ke0 (1/h) and its equilibration half-life ln2/ke0, which is shown with the results.
-- Load measured effect data and fit E0, Emax, EC50, optionally the Hill coefficient and ke0 (tick **ke0** to fit a delayed effect), using the concentrations predicted by the PK model. Because the error surface of a delayed effect has local minima, ke0 is started from a coarse scan unless you ask the fit to start from the values in the form. Effect residuals are plotted too: with a direct model, a smooth up-then-down pattern suggests a delayed effect, so switch to the delayed model and fit ke0.
+- **Sequential or Joint PK/PD fitting:** fit PK parameters (`ka, V, CL, Vmax, Km, V2, Q`) to plasma concentrations and PD parameters (`E0, Emax, EC50, Hill, ke0`) to measured effects either sequentially or **simultaneously (jointly)** via **Fit PK + PD jointly**, balancing concentration and effect residual scales and propagating PK uncertainty into PD estimates.
 - Export the simulation as CSV (time, concentration, gut, central and, for two compartments, peripheral amounts, plus the effect-site concentration for a delayed effect and the effect when it is switched on).
 
 Units throughout: dose in mg, volume in L, clearance in L/h, rate constants in 1/h, time in h, concentration in mg/L.
@@ -35,7 +35,7 @@ Units throughout: dose in mg, volume in L, clearance in L/h, rate constants in 1
 ### Help, guide and research lookup
 
 - **Welcome guide** on the first launch (reopen it from **Help > Welcome guide**).
-- **Manual** (Help > ligentry manual, or **F1**, which opens the page for the window you are in): 37 offline pages covering every feature, a worked example with sample data, a glossary, units, keyboard shortcuts and troubleshooting. It has full-text search, back/forward and a contents page.
+- **Manual** (Help > ligentry manual, or **F1**, which opens the page for the window you are in): 38 offline pages covering every feature, a worked example with sample data, a glossary, units, keyboard shortcuts and troubleshooting. It has full-text search, back/forward and a contents page.
 - **Web tab** in the Help window, an embedded browser for papers, drug and protein databases and videos. The search box can search the manual, or PubMed, Europe PMC, PubMed Central, ClinicalTrials.gov, DailyMed, MedlinePlus, PubChem, ChEMBL, UniProt, RCSB PDB, Wikipedia, YouTube or the web. Typing a DOI, `PMID 12345678`, `PMC1234567`, `NCT01234567`, `PDB 1HSG` or a web address goes straight to that page.
 - Nothing is loaded from the web until you search or click a web link, only public http/https pages open, and the manual works offline. If the embedded browser is unavailable, pages open in your normal browser. Some sites refuse requests from some networks (Google Scholar did in testing, so it is not offered).
 
@@ -81,9 +81,9 @@ python -m ligentry.gui.pkpd_window
 ```
 
 1. Choose the route (oral or IV bolus), then set the dose, regimen and PK parameters. Choose **Two compartments** to enable V2 and Q. The concentration curve updates as you change them.
-2. Optionally load measured concentrations (a CSV with time in h and concentration in mg/L) and press **Fit** to estimate the PK parameters. With IV bolus dosing the absorption rate ka is not fitted.
-3. Tick **Effect** to add the effect curve. To model a lag between concentration and effect, tick **Delayed effect (effect compartment)** in the same box and set the effect-site rate ke0; the effect-site concentration is then drawn as a dashed curve on the concentration plot. Optionally load measured effects (a CSV with time in h and effect), choose which parameters to fit (tick **ke0** to fit a delayed effect; it is off by default) and press **Fit effect**. Fit the PK first: the effect fit takes concentrations from the PK model currently in the form.
-4. **Use fitted values** and **Use fitted effect values** copy the estimates back into the form. Applying a fit that includes ke0 also switches the delayed effect on.
+2. Optionally load measured concentrations (a CSV with time in h and concentration in mg/L) and press **Fit parameters** to estimate the PK parameters. With IV bolus dosing the absorption rate ka is not fitted.
+3. Tick **Effect** to add the effect curve. To model a lag between concentration and effect, tick **Delayed effect (effect compartment)** in the same box and set the effect-site rate ke0; the effect-site concentration is then drawn as a dashed curve on the concentration plot. Optionally load measured effects (a CSV with time in h and effect), choose which parameters to fit (tick **ke0** to fit a delayed effect; it is off by default) and press **Fit effect**.
+4. When both concentration and effect datasets are loaded, **Fit PK + PD jointly** estimates all ticked PK and PD parameters simultaneously and propagates PK uncertainty into PD estimates. **Use fitted values**, **Use fitted effect values**, and **Use joint fitted values** copy the estimates back into the form.
 
 Tips for fitting a two-compartment model: IV bolus data with early, rapidly falling samples identify V, CL, V2 and Q best. Oral data alone make the fit harder and give apparent values (V/F, CL/F, V2/F, Q/F).
 
@@ -130,7 +130,7 @@ The simulator is checked against analytic solutions rather than a benchmark data
 - Limiting cases: Q → 0 recovers the one-compartment model, and very fast distribution behaves as one compartment of volume V1 + V2.
 - Repeated doses obey superposition, and saturated Michaelis-Menten elimination removes Vmax mg/h from the whole body.
 - The effect-site concentration matches its closed form after an IV bolus (including the limit where ke0 equals the elimination rate), its AUC equals the plasma AUC, a very large ke0 recovers the direct effect, and a delayed effect shows hysteresis: the same plasma concentration gives different effects on the way up and down.
-- Fits recover known parameters from simulated data (to 0.1% without noise, within 25% with 3% noise on IV data). A delayed-effect fit recovers ke0, E0, Emax and EC50 from several different starting values for ke0, and data from a direct effect push ke0 to its upper limit, which the fit notes report as no detectable delay.
+- Sequential and joint fits recover known parameters from simulated data (to 0.1% without noise, within 25% with noise). A delayed-effect fit recovers ke0, E0, Emax and EC50 from several different starting values for ke0, and data from a direct effect push ke0 to its upper limit, which the fit notes report as no detectable delay.
 
 These tests show the maths is implemented correctly. They do not show that any parameter set describes a real drug.
 
@@ -148,7 +148,7 @@ These tests show the maths is implemented correctly. They do not show that any p
 
 - The output is only as good as the parameters and data you supply. It is a modelling tool, not a prediction of how a drug behaves in people, and nothing here is dosing advice.
 - At most two compartments, oral or IV bolus dosing only (no infusions or other routes), and the effect is either direct or a single effect compartment. Other delay models (for example indirect-response models or tolerance) are not available.
-- From oral data alone, bioavailability F and volume V cannot be separated: the fitted volumes are V/F and V2/F, and the fitted clearances are CL/F and Q/F.
+- From oral data alone, bioavailability F and volume V cannot be separated: the fitted volumes are V/F and V2/F, and clearances are CL/F and Q/F.
 - Absorption and elimination can be swapped (flip-flop kinetics) when only oral data are fitted.
 - A two-compartment fit needs data that show both phases. When the distribution and terminal phases are close together, or early samples are missing, V2 and Q are poorly determined and the fit notes will say so.
 - EC50 and Emax trade off against each other when the measured concentrations never approach EC50, so the fit notes may warn about wide uncertainty.
@@ -171,7 +171,7 @@ ligentry/
   workflows/   docking, redocking, benchmark
   gui/         docking window, 3D viewer, background docking job, AI models dialog,
                PK/PD window, launcher, Help window, welcome guide dialog
-  pkpd/        PK/PD models, fitting, data loaders, residuals (no Qt dependency)
+  pkpd/        PK/PD models, sequential & joint fitting, data loaders, residuals (no Qt dependency)
   help/        manual pages, search, page rendering, web sources, guide logic (no Qt dependency)
   cli.py       command-line interface
 scripts/       tests, launcher installer, ML dataset builder & rescorer trainer, 4DFR investigation
@@ -186,20 +186,20 @@ Each wrapped docking tool is a plugin behind a common interface, so engines can 
 for t in scripts/test_*.py; echo $t; python $t | tail -2; end
 ```
 
-Each script ends with `ALL PASSED` or a count such as `1275 passed, 0 failed`. The PK/PD scripts are `test_pkpd`, `test_twocomp`, `test_effect`, `test_effect_compartment`, `test_observations`, `test_residuals`, `test_effect_residuals`, `test_pkpd_workflow`, `test_pkpd_window` and `test_pkpd_window_delayed`. They need only NumPy and SciPy, apart from the two window tests, which also need Qt.
+Each script ends with `ALL PASSED` or a count such as `1275 passed, 0 failed`. The PK/PD scripts are `test_pkpd`, `test_twocomp`, `test_effect`, `test_effect_compartment`, `test_observations`, `test_residuals`, `test_effect_residuals`, `test_pkpd_workflow`, `test_joint_fit`, `test_pkpd_window` and `test_pkpd_window_delayed`. They need only NumPy and SciPy, apart from the two window tests, which also need Qt.
 
 The help scripts are `test_help` (manual, search, web helpers and guide logic; no Qt; it also checks that the manual still matches the program's shortcuts, defaults and CSV columns) and `test_help_gui` (Help window, guide dialog and Help menus, offscreen). To try the embedded web view in the second one too: `env LIGENTRY_TEST_WEB=1 python scripts/test_help_gui.py`.
 
 ## Roadmap
 
-- PK/PD: joint PK and PD fitting, infusions and other routes, SBML import.
+- PK/PD: infusions and other routes, SBML import.
 - Docking: native PDBQT domain fine-tuning for the neural pose rescorer (aimed at `1HSG` and `4DFR`), OpenMM pose refinement, a protonation step if it improves the full benchmark, command-line flags for stereoisomer options.
 - Protein-structure workflows.
 - Replace the Open Babel subprocess with a pure-Python route, and port to Windows.
 
 ## Privacy
 
-ligentry has no usage tracking. It contacts the network only when you run docking (to download the structure from the RCSB PDB and ligands from ChEMBL), when you explicitly click **Download & install GPU pack** in the AI Models dialog, and when you search or open a page in the Help window. Settings (recent runs, whether the guide was shown) are stored in `~/.config/ligentry/ligentry.conf`, and optional downloaded AI model packs are stored in `~/.cache/ligentry/models/`. The Web tab keeps cookies and cache like any browser; **Web > Clear web data** in the Help window removes them.
+ligentry has no usage tracking. It contacts the network only when you run docking (to download the structure from the RCSB PDB and ligands from ChEMBL), when you explicitly click **Download & install GPU pack** in the AI Models dialog, and when you search or open a page in the Help window. Settings (recent runs, whether the guide was shown) are stored in `~/.config/ligentry/ligentry.conf`, and optional downloaded AI model packs are stored in `~/.local/share/ligentry/models/`. The Web tab keeps cookies and cache like any browser; **Web > Clear web data** in the Help window removes them.
 
 ## License and credits
 

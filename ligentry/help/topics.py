@@ -383,7 +383,7 @@ seeds rather than single runs.</p>
         section="PK/PD simulator",
         summary="The window, the workflow and what each part is for.",
         keywords=("pharmacokinetics", "pharmacodynamics", "pk", "pd", "simulator", "window", "tools", "layout"),
-        related=("pkpd-dosing", "pkpd-model", "pkpd-effect", "pkpd-fit", "pkpd-example", "pkpd-limits"),
+        related=("pkpd-dosing", "pkpd-model", "pkpd-effect", "pkpd-fit", "pkpd-effect-fit", "pkpd-joint-fit", "pkpd-example", "pkpd-limits"),
         web=("pharmacokinetics basics", "pharmacodynamics Emax model", "PK/PD modelling introduction"),
         body="""
 <p>Open it with <b>Tools &gt; PK/PD simulator</b> (<kbd>Ctrl+Shift+P</kbd>) or run
@@ -395,8 +395,8 @@ goes with a concentration.</p>
 <ul>
 <li><b>Left panel</b> (scrolls): <a href="topic:pkpd-dosing">Dosing</a>, <a href="topic:pkpd-model">Pharmacokinetics</a>,
 <a href="topic:pkpd-effect">Effect</a>, <a href="topic:pkpd-readout">Time window and readout</a>,
-<a href="topic:pkpd-fit">Measured data and fitting</a>, <a href="topic:pkpd-effect-fit">Effect data and fitting</a>
-and the export button.</li>
+<a href="topic:pkpd-fit">Measured data and fitting</a>, <a href="topic:pkpd-effect-fit">Effect data and fitting</a>,
+<a href="topic:pkpd-joint-fit">Joint PK + PD fitting</a> and the export button.</li>
 <li><b>Right</b>: the plots. Concentration on top; residual and effect panels appear when you load data or tick
 Effect. The toolbar above them zooms, pans and saves a picture.</li>
 </ul>
@@ -404,7 +404,7 @@ Effect. The toolbar above them zooms, pans and saves a picture.</li>
 <ol>
 <li>Set the regimen and PK parameters until the curve looks right, or</li>
 <li>load measured concentrations and <b>Fit parameters</b> to estimate them,</li>
-<li>then add an effect and, if you have effect data, <b>Fit effect</b>.</li>
+<li>then add an effect and, if you have effect data, <b>Fit effect</b> (or load both datasets and use <b>Fit PK + PD jointly</b>).</li>
 </ol>
 <p>The curve updates a moment after every change. A red message under the form (&quot;Cannot simulate&quot;)
 means a value is not allowed; the text says which.</p>
@@ -568,7 +568,7 @@ effect..., response..., e, pd, y. A header with two unrecognised names is read a
         summary="Load data, choose parameters, fit, read the table and notes, use the result.",
         keywords=("fit", "fitting", "estimate", "cv", "weighting", "proportional", "rmse", "optimiser", "load data", "use fitted values",
                   "uncertainty", "least squares"),
-        related=("pkpd-data-format", "pkpd-residuals", "pkpd-example", "pkpd-limits"),
+        related=("pkpd-data-format", "pkpd-effect-fit", "pkpd-joint-fit", "pkpd-residuals", "pkpd-example", "pkpd-limits"),
         web=("nonlinear least squares pharmacokinetic parameter estimation", "population versus individual PK fitting"),
         body="""
 <ol>
@@ -599,7 +599,7 @@ that are too close together to tell apart.</li>
         section="PK/PD simulator",
         summary="Load effect data, choose parameters (including ke0), fit and read the result.",
         keywords=("effect fit", "fit effect", "ec50", "emax", "e0", "hill", "ke0", "start from the values above", "standard error", "se"),
-        related=("pkpd-effect", "pkpd-delayed", "pkpd-residuals", "pkpd-data-format", "pkpd-example"),
+        related=("pkpd-effect", "pkpd-delayed", "pkpd-joint-fit", "pkpd-residuals", "pkpd-data-format", "pkpd-example"),
         web=("fitting Emax model EC50 estimation", "sparse data pharmacodynamic parameter identifiability"),
         body="""
 <p>The effect depends on the concentration, and ligentry takes the concentration at each effect time from the
@@ -621,6 +621,37 @@ from the form instead. For ke0, the default is to try a range of values first an
 <li><b>All concentrations are zero</b>: your effect times are before the drug is present. Check the dosing and the times.</li>
 <li>With a delayed effect, ke0 and EC50 are only as reliable as the PK model: a wrong PK model can look like a delay.</li>
 </ul>
+""",
+    ),
+    Topic(
+        id="pkpd-joint-fit",
+        title="Joint PK + PD fitting",
+        section="PK/PD simulator",
+        summary="Simultaneously fit PK and PD parameters against concentration and effect data.",
+        keywords=("joint", "simultaneous", "pk+pd", "joint fit", "fit pk + pd jointly", "use joint fitted values", "uncertainty propagation"),
+        related=("pkpd-fit", "pkpd-effect-fit", "pkpd-delayed", "pkpd-residuals", "pkpd-example"),
+        web=("simultaneous PK PD modelling", "sequential versus simultaneous PK/PD estimation"),
+        body="""
+<p>Sequential fitting estimates PK parameters first and then treats those predicted concentrations as fixed, noiseless
+inputs when fitting the effect. <b>Joint PK + PD fitting</b> optimizes all ticked PK and PD parameters simultaneously
+against both the measured concentrations and the measured effects.</p>
+<h3>When to use joint fitting</h3>
+<ul>
+<li>When effect measurements are sampled densely around the peak or hysteresis loop and can help pin down absorption
+or elimination rates alongside plasma samples.</li>
+<li>When you want parameter uncertainties (CV % for PK, &plusmn; SE for PD) computed from the full joint covariance matrix
+so PK uncertainty propagates into EC50 and ke0.</li>
+</ul>
+<h3>How to run a joint fit</h3>
+<ol>
+<li>Load both concentration data (<b>Load data...</b>) and effect data (<b>Load effect data...</b>). The
+<b>Fit PK + PD jointly</b> button becomes active once both datasets are loaded.</li>
+<li>Tick the PK parameters to fit in the PK fitting box and the PD parameters (including <b>ke0</b> for a delayed effect)
+in the Effect fitting box.</li>
+<li>Press <b>Fit PK + PD jointly</b>. ligentry balances the concentration and effect residual scales automatically,
+runs a fast warm-start, and polishes all free PK and PD parameters together.</li>
+<li>Press <b>Use joint fitted values</b> to copy both the PK and PD estimates back into the form.</li>
+</ol>
 """,
     ),
     Topic(
