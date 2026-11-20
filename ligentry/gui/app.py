@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -11,20 +12,25 @@ import psutil
 from PySide6.QtCore import QProcess, QSettings, Qt, QTimer
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QCheckBox, QFileDialog, QFormLayout, QHBoxLayout,
-    QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
-    QProgressBar, QPushButton, QSpinBox, QSplitter, QStyle, QTableWidget,
-    QTableWidgetItem, QToolBar, QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout,
+    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox,
+    QPlainTextEdit, QProgressBar, QPushButton, QSpinBox, QSplitter, QStyle,
+    QTableWidget, QTableWidgetItem, QToolBar, QVBoxLayout, QWidget,
 )
 
+from ligentry.core.model_manager import get_model_status
 from ligentry.gui import help_menu, runio
+from ligentry.gui.models_dialog import AIModelsDialog
 from ligentry.gui.viewer import MolViewer
 
 _PROGRESS_RE = re.compile(r"\[(\d+)/(\d+)\]")  # "[3/20] name" from the docking log
 
-COL_RANK, COL_NAME, COL_SCORE, COL_ISO, COL_STATUS, COL_NOTES = range(6)
-HEADERS = ["Rank", "Name", "Score (kcal/mol)", "Isomers", "Status", "Notes"]
+COL_RANK, COL_NAME, COL_AI, COL_PKD, COL_SCORE, COL_ISO, COL_STATUS, COL_NOTES = range(8)
+HEADERS = [
+    "Rank", "Name", "AI Score", "Pred pKd", "Vina (kcal/mol)", "Isomers", "Status", "Notes",
+]
 MAX_RECENT = 8
+MAX_TABLE_ROWS = 1000  # keep Qt snappy on 50k-ligand runs while results.csv holds all rows
 
 
 def fmt_time(seconds: float) -> str:
@@ -37,13 +43,14 @@ def fmt_time(seconds: float) -> str:
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.resize(1400, 850)
+        self.resize(1460, 860)
         self.proc: QProcess | None = None  # docking runs in its own process (ligentry.gui.job)
         self._buffer = ""  # partial output line from the job
         self._last_error = ""
         self.workdir = Path("runs/gui")
         self.pdb_id = ""
         self.rows: list[dict] = []  # table row i <-> self.rows[i]
+        self.smiles_file: str = ""
         self.dirty = False
         self.running = False
         self.stop_requested = False
@@ -59,14 +66,36 @@ class MainWindow(QMainWindow):
         self.pdb_edit = QLineEdit("1HSG")
         self.chembl_edit = QLineEdit("CHEMBL243")
         self.n_spin = QSpinBox()
-        self.n_spin.setRange(1, 200)
+        self.n_spin.setRange(1, 100_000)
         self.n_spin.setValue(5)
+
         self.smiles_edit = QPlainTextEdit()
         self.smiles_edit.setPlaceholderText(
             "Or paste ligands, one per line: SMILES [name]\n"
-            "(used only when the ChEMBL field is empty)"
+            "(used when ChEMBL target and Library file are empty)"
         )
-        self.smiles_edit.setMaximumHeight(110)
+        self.smiles_edit.setMaximumHeight(95)
+
+        self.lib_file_label = QLabel("None")
+        self.lib_file_label.setWordWrap(True)
+        self.load_lib_btn = QPushButton("Load .smi / .csv...")
+        self.load_lib_btn.setToolTip(
+            "Load a large ligand library file (up to 100,000 molecules) directly from disk"
+        )
+        self.clear_lib_btn = QPushButton("Clear")
+        self.clear_lib_btn.setEnabled(False)
+        self.load_lib_btn.clicked.connect(self._choose_library_file)
+        self.clear_lib_btn.clicked.connect(self._clear_library_file)
+        lib_row = QHBoxLayout()
+        lib_row.addWidget(self.lib_file_label, 1)
+        lib_row.addWidget(self.load_lib_btn)
+        lib_row.addWidget(self.clear_lib_btn)
+
+        self.engine_combo = QComboBox()
+        self.engine_combo.addItem("Auto (GPU Uni-Dock if installed, else CPU Vina)", "auto")
+        self.engine_combo.addItem("Uni-Dock (NVIDIA GPU batch)", "unidock")
+        self.engine_combo.addItem("AutoDock Vina (CPU)", "vina")
+
         self.exh_spin = QSpinBox()
         self.exh_spin.setRange(1, 64)
         self.exh_spin.setValue(8)
@@ -74,29 +103,45 @@ class MainWindow(QMainWindow):
         self.stereo_check.setChecked(True)
         self.stereo_check.setToolTip(
             "Ligands whose SMILES leave stereocentres or double bonds unspecified are "
-            "docked as every isomer (up to the cap) and the best-scoring one is kept. "
-            "Slower: up to the cap times more docking per such ligand."
+            "docked as every isomer (up to the cap) and the best-scoring one is kept."
         )
         self.iso_spin = QSpinBox()
         self.iso_spin.setRange(1, 64)
         self.iso_spin.setValue(8)
         self.iso_spin.setToolTip("Most isomers docked per ligand; more are sampled at random.")
         self.stereo_check.toggled.connect(self.iso_spin.setEnabled)
+
+        self.rescore_check = QCheckBox("Re-rank poses with AI neural rescorer")
+        self.rescore_check.setChecked(True)
+        self.rescore_check.setToolTip(
+            "Re-ranks docked poses using the neural interaction network. "
+            "Runs on CPU by default, or on your NVIDIA GPU if the optional GPU pack is installed."
+        )
+        self.device_combo = QComboBox()
+        self.device_combo.addItem("Auto (GPU if installed, else CPU)", "auto")
+        self.device_combo.addItem("CPU only", "cpu")
+        self.rescore_check.toggled.connect(self.device_combo.setEnabled)
+
         self.out_edit = QLineEdit("runs/gui")
         self.run_btn = QPushButton("Run docking")
         self.stop_btn = QPushButton("Stop")
         self.stop_btn.setToolTip(
-            "Finish the current docking step, keep the results so far and stop")
+            "Finish the current docking batch/step, keep the results so far and stop"
+        )
         self.stop_btn.setEnabled(False)
 
         form = QFormLayout()
         form.addRow("PDB ID (with bound ligand)", self.pdb_edit)
         form.addRow("ChEMBL target", self.chembl_edit)
+        form.addRow("Library file", lib_row)
         form.addRow("Max ligands", self.n_spin)
         form.addRow("Ligand SMILES", self.smiles_edit)
+        form.addRow("Docking engine", self.engine_combo)
         form.addRow("Exhaustiveness", self.exh_spin)
         form.addRow("Stereoisomers", self.stereo_check)
         form.addRow("Max isomers per ligand", self.iso_spin)
+        form.addRow("AI rescoring", self.rescore_check)
+        form.addRow("AI device", self.device_combo)
         form.addRow("Output folder", self.out_edit)
 
         buttons = QHBoxLayout()
@@ -126,19 +171,18 @@ class MainWindow(QMainWindow):
         self.table.setHorizontalHeaderLabels(HEADERS)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
-        # only the Notes cells are editable (the other items drop the edit flag)
         self.table.setEditTriggers(
             QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed
         )
         header = self.table.horizontalHeader()
         header.setStretchLastSection(True)
-        header.setSectionResizeMode(COL_NAME, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(COL_SCORE, QHeaderView.ResizeToContents)
+        for col in (COL_NAME, COL_AI, COL_PKD, COL_SCORE):
+            header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
 
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(2000)
-        self.log.setMaximumHeight(160)
+        self.log.setMaximumHeight(150)
 
         left = QWidget()
         lay = QVBoxLayout(left)
@@ -162,6 +206,10 @@ class MainWindow(QMainWindow):
 
         self._build_actions()
         self._build_menus_and_toolbar()
+
+        self.ai_badge = QLabel()
+        self.statusBar().addPermanentWidget(self.ai_badge)
+        self._refresh_badges()
         self.statusBar().showMessage("Ready")
 
         self.run_btn.clicked.connect(self.start)
@@ -169,7 +217,7 @@ class MainWindow(QMainWindow):
         self.table.itemSelectionChanged.connect(self.on_selection_changed)
         self.table.itemChanged.connect(self.on_item_changed)
 
-        psutil.cpu_percent(interval=None)  # prime: the first call always returns 0
+        psutil.cpu_percent(interval=None)
         self.timer = QTimer(self)
         self.timer.setInterval(500)
         self.timer.timeout.connect(self.tick)
@@ -177,6 +225,30 @@ class MainWindow(QMainWindow):
 
         self.update_title()
         self.update_actions()
+
+    # ---- library file picker ----------------------------------------------
+
+    def _choose_library_file(self) -> None:
+        chosen, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select ligand library file",
+            str(Path.home()),
+            "Molecule Lists (*.smi *.smiles *.csv *.tsv *.txt);;All files (*)",
+        )
+        if not chosen:
+            return
+        self.smiles_file = chosen
+        self.lib_file_label.setText(Path(chosen).name)
+        self.lib_file_label.setToolTip(chosen)
+        self.clear_lib_btn.setEnabled(True)
+        if self.chembl_edit.text().strip() == "CHEMBL243":
+            self.chembl_edit.clear()
+
+    def _clear_library_file(self) -> None:
+        self.smiles_file = ""
+        self.lib_file_label.setText("None")
+        self.lib_file_label.setToolTip("")
+        self.clear_lib_btn.setEnabled(False)
 
     # ---- actions, menus, toolbar -----------------------------------------
 
@@ -199,50 +271,69 @@ class MainWindow(QMainWindow):
     def _build_actions(self) -> None:
         S = QStyle.StandardPixmap
         self.act_new = self._action(
-            "New run", self.new_run, "Ctrl+N", S.SP_FileIcon, "Clear the results and start fresh")
+            "New run", self.new_run, "Ctrl+N", S.SP_FileIcon, "Clear the results and start fresh"
+        )
         self.act_open = self._action(
             "Open run...", self.open_run, "Ctrl+O", S.SP_DirOpenIcon,
-            "Load a finished run folder without docking again")
+            "Load a finished run folder without docking again",
+        )
         self.act_save = self._action(
             "Save", self.save, "Ctrl+S", S.SP_DialogSaveButton,
-            "Write the results (with your notes) back to the run folder")
+            "Write the results (with your notes) back to the run folder",
+        )
         self.act_save_as = self._action(
             "Save as...", self.save_as, "Ctrl+Shift+S", S.SP_DriveHDIcon,
-            "Copy the whole run folder to a new place and continue there")
+            "Copy the whole run folder to a new place and continue there",
+        )
         self.act_export = self._action(
             "Export CSV...", self.export_csv, "Ctrl+E", S.SP_ArrowDown,
-            "Write the table to a CSV file anywhere")
+            "Write the table to a CSV file anywhere",
+        )
         self.act_quit = self._action("Quit", self.close, "Ctrl+Q", S.SP_DialogCloseButton)
 
         self.act_copy_smiles = self._action(
             "Copy SMILES", self.copy_smiles, "Ctrl+Shift+C", S.SP_FileLinkIcon,
-            "Copy the selected ligand's SMILES (best isomer) to the clipboard")
+            "Copy the selected ligand's SMILES (best isomer) to the clipboard",
+        )
         self.act_edit_note = self._action(
             "Edit note", self.edit_note, "F2", S.SP_FileDialogDetailedView,
-            "Edit the note of the selected ligand")
+            "Edit the note of the selected ligand",
+        )
         self.act_remove = self._action(
             "Remove ligand", self.remove_selected, "Ctrl+Backspace", S.SP_TrashIcon,
-            "Remove the selected ligand from the results table (files stay on disk)")
+            "Remove the selected ligand from the results table (files stay on disk)",
+        )
 
         self.act_run = self._action(
-            "Run docking", self.start, "Ctrl+R", S.SP_MediaPlay, "Start docking with the form settings")
+            "Run docking", self.start, "Ctrl+R", S.SP_MediaPlay,
+            "Start docking with the form settings",
+        )
         self.act_stop = self._action(
             "Stop", self.stop, "Ctrl+.", S.SP_MediaStop,
-            "Finish the current docking step, keep the results so far and stop")
+            "Finish the current docking step, keep the results so far and stop",
+        )
 
         self.act_show_log = self._action(
-            "Show log", self.toggle_log, None, None, "Show or hide the log box", checkable=True)
+            "Show log", self.toggle_log, None, None, "Show or hide the log box", checkable=True
+        )
         self.act_show_log.setChecked(True)
         self.act_reset_view = self._action(
             "Reset 3D view", self.show_selected, None, S.SP_BrowserReload,
-            "Re-centre the 3D view on the selected ligand")
+            "Re-centre the 3D view on the selected ligand",
+        )
         self.act_pkpd = self._action(
             "PK/PD simulator...", self.open_pkpd, "Ctrl+Shift+P", S.SP_ComputerIcon,
-            "Open the pharmacokinetics / pharmacodynamics simulator")
+            "Open the pharmacokinetics / pharmacodynamics simulator",
+        )
+        self.act_ai_models = self._action(
+            "AI pose rescorer models...", self.open_ai_models, "Ctrl+Shift+M",
+            S.SP_DriveNetIcon,
+            "Inspect active AI rescorer tier or download the optional GPU model pack",
+        )
 
     def _build_menus_and_toolbar(self) -> None:
         menubar = self.menuBar()
-        menubar.setNativeMenuBar(False)  # keep the menus inside the window (KDE global menu)
+        menubar.setNativeMenuBar(False)
 
         file_menu = menubar.addMenu("&File")
         file_menu.addAction(self.act_new)
@@ -272,6 +363,7 @@ class MainWindow(QMainWindow):
 
         tools_menu = menubar.addMenu("&Tools")
         tools_menu.addAction(self.act_pkpd)
+        tools_menu.addAction(self.act_ai_models)
 
         help_menu.add_help_menu(self, "docking-overview", about=self.about)
 
@@ -290,9 +382,21 @@ class MainWindow(QMainWindow):
         bar.addAction(self.act_reset_view)
         bar.addSeparator()
         bar.addAction(self.act_pkpd)
+        bar.addAction(self.act_ai_models)
         bar.addSeparator()
         bar.addAction(self.act_help)
         self.addToolBar(bar)
+
+    def _refresh_badges(self) -> None:
+        st = get_model_status(prefer_gpu=True)
+        gpu_dock = "Uni-Dock GPU" if shutil.which("unidock") else "Vina CPU"
+        ai_txt = f"AI: {st.active_tier.upper()}" if st.model_path else "AI: n/a"
+        self.ai_badge.setText(f"Engine: {gpu_dock} | {ai_txt}")
+
+    def open_ai_models(self) -> None:
+        dlg = AIModelsDialog(self)
+        dlg.exec()
+        self._refresh_badges()
 
     def open_pkpd(self) -> None:
         from ligentry.gui.pkpd_window import PKPDWindow
@@ -364,17 +468,28 @@ class MainWindow(QMainWindow):
 
     # ---- table <-> rows ---------------------------------------------------
 
+    @staticmethod
+    def _fmt_float(val, fmt: str) -> str:
+        if val is None or val == "":
+            return "n/a"
+        try:
+            return format(float(val), fmt)
+        except (TypeError, ValueError):
+            return str(val)
+
     def refresh_table(self, select: int | None = None) -> None:
         self._populating = True
+        shown = self.rows[:MAX_TABLE_ROWS]
         try:
-            self.table.setRowCount(len(self.rows))
+            self.table.setRowCount(len(shown))
             read_only = Qt.ItemIsSelectable | Qt.ItemIsEnabled
-            for i, row in enumerate(self.rows):
-                score = row.get("vina_score_kcal_mol")
+            for i, row in enumerate(shown):
                 values = {
                     COL_RANK: str(i + 1),
                     COL_NAME: row.get("name", ""),
-                    COL_SCORE: f"{score:.2f}" if score is not None else "n/a",
+                    COL_AI: self._fmt_float(row.get("ai_pose_score"), ".3f"),
+                    COL_PKD: self._fmt_float(row.get("pred_pkd"), ".2f"),
+                    COL_SCORE: self._fmt_float(row.get("vina_score_kcal_mol"), ".2f"),
                     COL_ISO: str(row.get("n_isomers", 1)),
                     COL_STATUS: row.get("status", ""),
                     COL_NOTES: row.get("notes", ""),
@@ -386,7 +501,12 @@ class MainWindow(QMainWindow):
                     self.table.setItem(i, col, item)
         finally:
             self._populating = False
-        if select is not None and 0 <= select < len(self.rows):
+        if len(self.rows) > MAX_TABLE_ROWS:
+            self.statusBar().showMessage(
+                f"Showing top {MAX_TABLE_ROWS:,} of {len(self.rows):,} ligands "
+                f"(all ranked results saved in results.csv)"
+            )
+        if select is not None and 0 <= select < len(shown):
             self.table.selectRow(select)
         self.update_actions()
         self.update_title()
@@ -468,7 +588,8 @@ class MainWindow(QMainWindow):
         self.set_dirty(False)
         self.refresh_table(select=0 if rows else None)
         self._add_recent(folder)
-        self.statusBar().showMessage(f"Opened {folder}")
+        if len(rows) <= MAX_TABLE_ROWS:
+            self.statusBar().showMessage(f"Opened {folder}")
 
     def save(self) -> bool:
         if not self.rows:
@@ -568,20 +689,24 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self, "About ligentry",
             "ligentry: an open-source platform for docking, drug effectiveness and "
-            "protein folding simulations.\n\nDocking engine: AutoDock Vina. "
-            "Chemistry: RDKit, Meeko, Open Babel.",
+            "protein folding simulations.\n\nDocking engines: AutoDock Vina & Uni-Dock (GPU) "
+            "+ neural pose rescorer. Chemistry: RDKit, Meeko, Open Babel.",
         )
 
     def closeEvent(self, event) -> None:
         if self.running:
             QMessageBox.information(
-                self, "ligentry", "Docking is still running. Wait for it to finish before closing.")
+                self, "ligentry", "Docking is still running. Wait for it to finish before closing."
+            )
             event.ignore()
             return
         if not self.maybe_save():
             event.ignore()
             return
+        self.timer.stop()
         help_menu.close_help()
+        if hasattr(self.viewer, "shutdown"):
+            self.viewer.shutdown()
         event.accept()
 
     # ---- run control ------------------------------------------------------
@@ -595,8 +720,10 @@ class MainWindow(QMainWindow):
         if len(pdb_id) != 4:
             QMessageBox.warning(self, "ligentry", "Enter a 4-character PDB ID.")
             return
-        if not chembl and not smiles_text.strip():
-            QMessageBox.warning(self, "ligentry", "Enter a ChEMBL target or paste SMILES.")
+        if not chembl and not self.smiles_file and not smiles_text.strip():
+            QMessageBox.warning(
+                self, "ligentry", "Enter a ChEMBL target, load a library file, or paste SMILES."
+            )
             return
         if not self.maybe_save():
             return
@@ -616,7 +743,7 @@ class MainWindow(QMainWindow):
         self.completed = 0
         self.total = 0
         self.failed = False
-        self.progress.setRange(0, 0)  # busy animation until the first ligand starts
+        self.progress.setRange(0, 0)
         self.elapsed_label.setText("Elapsed 00:00")
         self.remaining_label.setText("Setting up ...")
 
@@ -633,17 +760,21 @@ class MainWindow(QMainWindow):
         spec = {
             "pdb_id": self.pdb_id,
             "chembl_target": chembl,
-            "smiles_text": smiles_text,
+            "smiles_file": self.smiles_file,
+            "smiles_text": "" if (chembl or self.smiles_file) else smiles_text,
             "n_ligands": self.n_spin.value(),
             "exhaustiveness": self.exh_spin.value(),
             "workdir": str(self.workdir.resolve()),
             "enumerate_stereo": self.stereo_check.isChecked(),
             "max_isomers": self.iso_spin.value(),
+            "rescore": self.rescore_check.isChecked(),
+            "rescore_device": self.device_combo.currentData(),
+            "engine": self.engine_combo.currentData(),
         }
         try:
             self.workdir.mkdir(parents=True, exist_ok=True)
             (self.workdir / "STOP").unlink(missing_ok=True)
-            job_path = self.workdir / "job.json"  # also a record of the run's settings
+            job_path = self.workdir / "job.json"
             job_path.write_text(json.dumps(spec, indent=2))
         except OSError as exc:
             QMessageBox.critical(self, "ligentry", f"Could not prepare the run folder: {exc}")
@@ -670,7 +801,7 @@ class MainWindow(QMainWindow):
     def _handle_line(self, line: str) -> None:
         line = line.rstrip("\r")
         if not line.strip() or line.startswith("WARNING: At low exhaustiveness"):
-            return  # harmless Vina notice
+            return
         if line.startswith("ERROR: "):
             self._last_error = line[len("ERROR: "):]
         self.on_log(line)
@@ -700,7 +831,7 @@ class MainWindow(QMainWindow):
             self.proc = None
 
     def on_proc_error(self, error) -> None:
-        if error == QProcess.ProcessError.FailedToStart:  # 'finished' never fires in this case
+        if error == QProcess.ProcessError.FailedToStart:
             self.on_failed("Could not start the docking process.")
             self.on_finished()
 
@@ -709,7 +840,7 @@ class MainWindow(QMainWindow):
             return
         self.stop_requested = True
         try:
-            (self.workdir / "STOP").write_text("stop\n")  # the job polls for this file
+            (self.workdir / "STOP").write_text("stop\n")
         except OSError as exc:
             self.stop_requested = False
             QMessageBox.warning(self, "ligentry", f"Could not signal the job to stop: {exc}")
@@ -727,7 +858,7 @@ class MainWindow(QMainWindow):
         if self.t_first_ligand is None:
             self.t_first_ligand = time.time()
         self.total = total
-        self.completed = index - 1  # the log line marks the START of ligand `index`
+        self.completed = index - 1
         self.progress.setRange(0, total)
         self.progress.setValue(self.completed)
 
@@ -758,7 +889,7 @@ class MainWindow(QMainWindow):
         self.update_actions()
 
     def on_done(self, rows: list) -> None:
-        self.rows = [dict(row, notes="") for row in rows]  # run_docking already wrote results.csv
+        self.rows = [dict(row, notes="") for row in rows]
         self.set_dirty(False)
         self.refresh_table(select=0 if self.rows else None)
         self._add_recent(self.workdir)
@@ -801,6 +932,8 @@ def main() -> int:
     app = QApplication(sys.argv)
     help_menu.connect_shutdown(app)
     window = MainWindow()
+    if hasattr(window.viewer, "shutdown"):
+        app.aboutToQuit.connect(window.viewer.shutdown)
     window.show()
     help_menu.schedule_guide(window)  # first launch only
     return app.exec()

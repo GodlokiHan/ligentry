@@ -58,7 +58,7 @@ def read_pocket_atoms(pdb_path: str | Path, ligand_pts: np.ndarray, cutoff: floa
     """Heavy atoms of every residue with any atom within `cutoff` A of the ligand."""
     residues: dict[tuple[str, str, str], list[tuple[float, float, float]]] = {}
     for line in Path(pdb_path).read_text().splitlines():
-        if not line.startswith("ATOM") or line[16] not in (" ", "A"):
+        if not line.startswith("ATOM") or len(line) <= 16 or line[16] not in (" ", "A"):
             continue
         if (line[76:78].strip() if len(line) >= 78 else "") == "H":
             continue
@@ -87,9 +87,36 @@ def _bond_cells(pts: np.ndarray) -> list[int]:
 class MolViewer(QtInteractor):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._closed = False
         self.set_background("white")
 
+    def shutdown(self) -> None:
+        """Cleanly release VTK/OpenGL resources before Qt destroys the window."""
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self.clear()
+        except Exception:
+            pass
+        try:
+            if getattr(self, "iren", None) is not None:
+                self.iren.TerminateApp()
+        except Exception:
+            pass
+        try:
+            if getattr(self, "render_window", None) is not None:
+                self.render_window.Finalize()
+        except Exception:
+            pass
+        try:
+            self.close()
+        except Exception:
+            pass
+
     def show_complex(self, receptor_pdb: str | Path, pose_pdbqt: str | Path | None = None) -> None:
+        if self._closed:
+            return
         self.clear()
 
         for pts in read_ca_traces(receptor_pdb).values():

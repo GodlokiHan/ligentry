@@ -3,3 +3,8 @@ __pycache__/
 runs/
 .venv/
 *.kate-swp
+
+# Local ML datasets, large GPU weights & release tarballs
+data/
+/models/
+*.tar.gz

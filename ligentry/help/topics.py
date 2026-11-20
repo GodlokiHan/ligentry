@@ -144,18 +144,19 @@ See <a href="topic:web-reading">Reading medical and scientific sources criticall
         title="Docking overview",
         section="Docking",
         summary="What docking does, the steps ligentry takes, and what a score means.",
-        keywords=("vina", "autodock", "pose", "binding", "score", "affinity", "pocket", "protein", "ligand"),
+        keywords=("vina", "autodock", "unidock", "pose", "binding", "score", "affinity", "pocket", "protein", "ligand"),
         related=("docking-inputs", "docking-run", "docking-results", "docking-limits"),
         web=("molecular docking", "AutoDock Vina scoring function"),
         body="""
 <p><b>Molecular docking</b> tries many positions and shapes (poses) of a small molecule (the ligand) inside the
-binding pocket of a protein (the receptor) and estimates how well each fits. ligentry uses AutoDock Vina.</p>
+binding pocket of a protein (the receptor) and estimates how well each fits. ligentry uses Uni-Dock (GPU) or AutoDock Vina (CPU)
+and re-ranks poses with a neural pose rescorer.</p>
 <h3>What ligentry does for each run</h3>
 <ol>
 <li>Downloads the protein structure you named from the RCSB PDB.</li>
 <li>Finds the binding pocket from the ligand that is already bound in that crystal structure.</li>
 <li>Prepares the receptor (Open Babel, protonated for pH 7.4) and each ligand (RDKit and Meeko).</li>
-<li>Docks every ligand with Vina, and keeps the best-scoring pose for each.</li>
+<li>Docks every ligand and re-ranks candidate poses with the AI neural rescorer.</li>
 <li>Ranks the ligands by score and shows the table and a 3D view.</li>
 </ol>
 <h3>What the score means</h3>
@@ -168,8 +169,8 @@ protein in the same run. See <a href="topic:docking-limits">Docking limitations<
         id="docking-inputs",
         title="Choosing a target and ligands",
         section="Docking",
-        summary="PDB IDs, ChEMBL targets and the SMILES format.",
-        keywords=("pdb id", "chembl", "smiles", "input", "ligand list", "paste", "1hsg", "chembl243"),
+        summary="PDB IDs, ChEMBL targets, library files and the SMILES format.",
+        keywords=("pdb id", "chembl", "smiles", "input", "ligand list", "paste", "1hsg", "chembl243", "library"),
         related=("docking-run", "docking-stereo", "glossary"),
         web=("RCSB PDB search", "ChEMBL target search", "SMILES notation tutorial"),
         body="""
@@ -179,16 +180,16 @@ contain a ligand bound in the pocket you care about, because ligentry builds the
 You can look up codes at <a href="https://www.rcsb.org/">rcsb.org</a>.</p>
 <h3>ChEMBL target</h3>
 <p>A ChEMBL target ID such as <code>CHEMBL243</code>. ligentry fetches known active molecules for that target,
-up to <b>Max ligands</b> (1 to 200).</p>
-<h3>Your own ligands (SMILES)</h3>
-<p>Leave the ChEMBL field empty and paste ligands into the <b>Ligand SMILES</b> box, one per line, as
+up to <b>Max ligands</b> (1 to 100,000).</p>
+<h3>Your own ligands (Library file or SMILES)</h3>
+<p>Load a <code>.smi</code> or <code>.csv</code> library file (up to 100,000 ligands), or leave the ChEMBL and Library fields empty and paste ligands into the <b>Ligand SMILES</b> box, one per line, as
 <code>SMILES [name]</code>:</p>
 <pre>CC(=O)Oc1ccccc1C(=O)O aspirin
 CN1C=NC2=C1C(=O)N(C(=O)N2C)C caffeine</pre>
 <ul>
 <li>If you give no name, the ligand is called <code>lig</code> followed by its line number.</li>
 <li>Blank lines and lines starting with <code>#</code> are ignored.</li>
-<li>The ChEMBL field wins: SMILES are only used when it is empty.</li>
+<li>The ChEMBL field wins over Library file and pasted SMILES.</li>
 </ul>
 """,
     ),
@@ -203,10 +204,10 @@ CN1C=NC2=C1C(=O)N(C(=O)N2C)C caffeine</pre>
 <table @T@>
 <tr><th>Setting</th><th>Default</th><th>What it does</th></tr>
 <tr><td>PDB ID (with bound ligand)</td><td>1HSG</td><td>Protein structure, and the pocket from its bound ligand.</td></tr>
-<tr><td>ChEMBL target</td><td>CHEMBL243</td><td>Fetch known actives for this target. Empty = use the SMILES box.</td></tr>
-<tr><td>Max ligands</td><td>5</td><td>How many ChEMBL ligands to fetch (1 to 200).</td></tr>
-<tr><td>Ligand SMILES</td><td>empty</td><td>Your own ligands, used only when the ChEMBL field is empty.</td></tr>
-<tr><td>Exhaustiveness</td><td>8</td><td>How hard Vina searches (1 to 64). Higher is slower and a little more thorough.</td></tr>
+<tr><td>ChEMBL target</td><td>CHEMBL243</td><td>Fetch known actives for this target. Empty = use Library file or SMILES box.</td></tr>
+<tr><td>Max ligands</td><td>5</td><td>How many ligands to fetch or dock from a library (1 to 100,000).</td></tr>
+<tr><td>Ligand SMILES</td><td>empty</td><td>Your own ligands, used when ChEMBL and Library file are empty.</td></tr>
+<tr><td>Exhaustiveness</td><td>8</td><td>How hard the docking engine searches (1 to 64). Higher is slower and a little more thorough.</td></tr>
 <tr><td>Stereoisomers</td><td>on</td><td>See <a href="topic:docking-stereo">Stereoisomers</a>.</td></tr>
 <tr><td>Max isomers per ligand</td><td>8</td><td>Cap on isomers docked per ligand.</td></tr>
 <tr><td>Output folder</td><td>runs/gui</td><td>Where the run is written. Reusing a folder replaces its results.</td></tr>
@@ -215,8 +216,8 @@ CN1C=NC2=C1C(=O)N(C(=O)N2C)C caffeine</pre>
 and estimated remaining time, a CPU meter and a log. The estimate appears after the first ligand finishes.</p>
 <p>Docking runs in its own process at a lower priority, so the window stays responsive even while all CPU cores
 are busy. You can <a href="topic:docking-stop">stop</a> a run at any time and keep what is finished.</p>
-<p>Before it starts, ligentry checks that the PDB ID has four characters and that you gave either a ChEMBL target
-or some SMILES. If you have unsaved changes to earlier results it asks whether to save them first.</p>
+<p>Before it starts, ligentry checks that the PDB ID has four characters and that you gave either a ChEMBL target,
+a library file, or some SMILES. If you have unsaved changes to earlier results it asks whether to save them first.</p>
 """.replace("@T@", _TABLE),
     ),
     Topic(
@@ -253,9 +254,11 @@ some were, for example <code>ok (3/4 isomers docked)</code>.</li>
         body="""
 <table @T@>
 <tr><th>Column</th><th>Meaning</th></tr>
-<tr><td>Rank</td><td>Position by score, best first.</td></tr>
-<tr><td>Name</td><td>The ligand's name from ChEMBL or from your SMILES list.</td></tr>
-<tr><td>Score (kcal/mol)</td><td>Best Vina score. More negative is better. <code>n/a</code> means docking failed.</td></tr>
+<tr><td>Rank</td><td>Position by AI pose score (or Vina score when rescoring is off), best first.</td></tr>
+<tr><td>Name</td><td>The ligand's name from ChEMBL, library file, or from your SMILES list.</td></tr>
+<tr><td>AI Score</td><td>Neural pose rescorer probability (0 to 1) that the top pose is native-like.</td></tr>
+<tr><td>Pred pKd</td><td>Predicted binding affinity (-log10 Kd) from the neural rescorer.</td></tr>
+<tr><td>Vina (kcal/mol)</td><td>Best Vina score. More negative is better. <code>n/a</code> means docking failed.</td></tr>
 <tr><td>Isomers</td><td>How many stereoisomers were docked.</td></tr>
 <tr><td>Status</td><td><code>ok</code>, or a note such as <code>ok (stopped: 2/4 isomers docked)</code> or the reason for a failure.</td></tr>
 <tr><td>Notes</td><td>Your own text. Double-click or press <kbd>F2</kbd> to edit. Saved with the run.</td></tr>
@@ -794,7 +797,7 @@ there is no detectable delay. That is the correct answer.</li>
 <tr><td>Exhaustiveness</td><td>How much effort Vina puts into searching for poses.</td></tr>
 <tr><td>Flip-flop kinetics</td><td>Absorption slower than elimination, so the two rates can be confused when fitting oral data.</td></tr>
 <tr><td>Hill coefficient</td><td>Steepness of the concentration-effect curve.</td></tr>
-<tr><td>Hysteresis</td><td>Effect that differs at the same concentration on the way up and down, because of a delay.</td></tr>
+<tr><td>Hysteresis</td><td>Effect that differs at the same concentration on the way up and on the way down, because of a delay.</td></tr>
 <tr><td>ke0</td><td>Rate constant of equilibration between plasma and the effect site (1/h).</td></tr>
 <tr><td>Ligand / receptor</td><td>The small molecule / the protein it binds.</td></tr>
 <tr><td>Michaelis-Menten elimination</td><td>Saturable removal: Vmax (mg/h) and Km (mg/L).</td></tr>
@@ -846,10 +849,10 @@ ligentry dock --pdb 1HSG --chembl CHEMBL243 --n 20 --out runs/hiv_protease
 ligentry redock --pdb 1HSG --seed 42 --out runs/redock_1hsg
 ligentry benchmark --seeds 42 7 123 2024 99 --out runs/benchmark</pre>
 <ul>
-<li><code>plugins</code> lists the installed tool wrappers (receptor prep, ligand prep, Vina).</li>
+<li><code>plugins</code> lists the installed tool wrappers (receptor prep, ligand prep, Vina, Uni-Dock, pose rescorer).</li>
 <li><code>dock</code> runs a docking job like the main window does.</li>
 <li><code>redock</code> redocks one crystal ligand and reports its RMSD.</li>
-<li><code>benchmark</code> runs the full validation set (about 11 minutes).</li>
+<li><code>benchmark</code> runs the full validation set (about 11 minutes on CPU, ~6 minutes on GPU).</li>
 </ul>
 <p>A run made on the command line can be opened later with <b>File &gt; Open run...</b>.</p>
 """,
@@ -927,8 +930,8 @@ environment with <code>python -m pip install PySide6-Addons</code> (same version
         keywords=("license", "licence", "apache", "credits", "about", "thanks", "authors", "open source", "citation"),
         related=("welcome",),
         body="""
-<p>ligentry is released under the Apache-2.0 license (see the <code>LICENSE</code> file). It builds on AutoDock Vina, RDKit,
-Meeko, Open Babel, PySide6, PyVista, VTK, NumPy, SciPy and Matplotlib, and on the RCSB PDB and ChEMBL databases. Each has its
+<p>ligentry is released under the Apache-2.0 license (see the <code>LICENSE</code> file). It builds on AutoDock Vina, Uni-Dock, RDKit,
+Meeko, Open Babel, PySide6, PyVista, VTK, NumPy, SciPy, PyTorch, ONNX Runtime and Matplotlib, and on the RCSB PDB and ChEMBL databases. Each has its
 own license, so check them before redistributing a bundled copy.</p>
 <p>If you use ligentry in published work, please also cite the tools and databases it uses, in particular AutoDock Vina for docking.</p>
 """,

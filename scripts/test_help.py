@@ -281,7 +281,7 @@ if APP.exists():
                        (r"iso_spin.*?setValue\(8\)", "max isomers 8")]:
         check(f"app.py default {label}", re.search(pat, app_src, re.S) is not None)
     check("app.py default PDB 1HSG", "1HSG" in app_src and "CHEMBL243" in app_src)
-    check("app.py spin ranges match manual", "setRange(1, 200)" in app_src and "setRange(1, 64)" in app_src)
+    check("app.py spin ranges match manual", "setRange(1, 100_000)" in app_src and "setRange(1, 64)" in app_src)
     check("manual says runs/gui", "runs/gui" in topics.get_topic("docking-run").body and "runs/gui" in app_src)
 else:
     print("note: ligentry/gui/app.py not found, skipping drift checks against it")

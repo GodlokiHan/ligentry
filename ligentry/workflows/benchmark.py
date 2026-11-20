@@ -36,7 +36,7 @@ BENCHMARK_SET: list[tuple[str, str, str]] = [
 
 CSV_FIELDS = [
     "pdb", "ligand", "target", "status", "seeds", "seed_passes", "top_pose_rmsd",
-    "best_rmsd_any_pose", "top_vina_score", "passed", "seconds",
+    "best_rmsd_any_pose", "top_ai_score", "top_vina_score", "passed", "seconds",
 ]
 
 
@@ -46,6 +46,9 @@ def run_benchmark(
     exhaustiveness: int = 16,
     n_poses: int = 9,
     seeds: list[int] | tuple[int, ...] = (42,),
+    rescore: bool = True,
+    rescore_device: str = "auto",
+    engine: str = "auto",
 ) -> dict:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -62,8 +65,8 @@ def run_benchmark(
         row = {
             "pdb": pdb_id, "ligand": resname, "target": target, "status": "ok",
             "seeds": len(seeds), "seed_passes": 0, "top_pose_rmsd": None,
-            "best_rmsd_any_pose": None, "top_vina_score": None, "passed": False,
-            "seconds": None,
+            "best_rmsd_any_pose": None, "top_ai_score": None, "top_vina_score": None,
+            "passed": False, "seconds": None,
         }
         start = time.time()
         try:
@@ -77,6 +80,9 @@ def run_benchmark(
                         exhaustiveness=exhaustiveness,
                         n_poses=n_poses,
                         seed=seed,
+                        rescore=rescore,
+                        rescore_device=rescore_device,
+                        engine=engine,
                     )
                 )
             tops = [r["top_pose_rmsd"] for r in results]
@@ -84,8 +90,15 @@ def run_benchmark(
                 r["poses"][0]["vina_score"] for r in results
                 if r["poses"][0]["vina_score"] is not None
             ]
+            top_ai_scores = [
+                r["poses"][0]["ai_score"] for r in results
+                if r["poses"][0].get("ai_score") is not None
+            ]
             row["top_pose_rmsd"] = round(statistics.median(tops), 3)
             row["best_rmsd_any_pose"] = min(r["best_rmsd_any_pose"] for r in results)
+            row["top_ai_score"] = (
+                round(statistics.median(top_ai_scores), 4) if top_ai_scores else None
+            )
             row["top_vina_score"] = round(statistics.median(top_scores), 3) if top_scores else None
             row["seed_passes"] = sum(1 for r in results if r["success_top_pose"])
             row["passed"] = row["seed_passes"] * 2 > len(seeds)
@@ -102,6 +115,9 @@ def run_benchmark(
         "threshold_angstrom": SUCCESS_RMSD,
         "exhaustiveness": exhaustiveness,
         "seeds": seeds,
+        "docking_engine": engine,
+        "rescored": rescore,
+        "rescore_device": rescore_device,
         "n_total": len(rows),
         "n_completed": len(completed),
         "n_errors": len(rows) - len(completed),

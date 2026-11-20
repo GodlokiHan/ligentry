@@ -36,6 +36,18 @@ _AD_TO_ELEMENT = {
 }
 
 
+def _resolve_docking_plugin(engine: str = "auto"):
+    pref = engine.lower().strip()
+    if pref == "vina":
+        return get_plugin("vina"), "vina"
+    if pref == "unidock":
+        return get_plugin("unidock"), "unidock"
+    try:
+        return get_plugin("unidock"), "unidock"
+    except Exception:
+        return get_plugin("vina"), "vina"
+
+
 def _fetch_ccd_smiles(resname: str) -> str:
     """Get the ideal SMILES for a PDB ligand code from the RCSB component dictionary."""
     url = f"https://data.rcsb.org/rest/v1/core/chemcomp/{resname}"
@@ -129,8 +141,6 @@ def _mol_from_atoms_geometric(atoms, template, min_bond: float = 1.0, max_bond: 
     def dist(i: int, j: int) -> float:
         return sum((coords[i][k] - coords[j][k]) ** 2 for k in range(3)) ** 0.5
 
-    # Breadth-first order so every atom (after the first of each fragment) has a
-    # neighbour that is already placed.
     order: list[int] = []
     seen: set[int] = set()
     for start in range(n):
@@ -207,7 +217,7 @@ def _mol_from_atoms(atoms, template):
 
 
 def _pose_models(pdbqt_path: str) -> tuple[list[list[tuple[str, float, float, float]]], list[float]]:
-    """Parse a Vina output PDBQT into per-pose heavy-atom lists and Vina scores."""
+    """Parse a Vina/Uni-Dock output PDBQT into per-pose heavy-atom lists and scores."""
     models: list[list[tuple[str, float, float, float]]] = []
     scores: list[float] = []
     current: list[tuple[str, float, float, float]] | None = None
@@ -239,14 +249,7 @@ PROTONATION_STATES = ("neutral", "anion", "bound")
 
 
 def _protonate_smiles(smiles: str, state: str) -> str:
-    """Return `smiles` in the requested protonation state.
-
-    neutral : acids and bases neutralised (original behaviour, the default)
-    anion   : carboxylic acids deprotonated, as a pH 7.4 model would give
-    bound   : anion + N1 of a 2,4-diaminopyrimidine ring protonated. This mimics
-              methotrexate bound to DHFR, where N1-H+ salt-bridges Asp27. It is
-              specific to that chemotype and raises ValueError if it is absent.
-    """
+    """Return `smiles` in the requested protonation state."""
     from rdkit import Chem
     from rdkit.Chem.MolStandardize import rdMolStandardize
 
@@ -265,7 +268,6 @@ def _protonate_smiles(smiles: str, state: str) -> str:
         rw.GetAtomWithIdx(hydroxyl).SetFormalCharge(-1)
 
     if state == "bound":
-        # ring N next to a fused carbon and to a carbon carrying NH2 (pteridine N1)
         n1 = Chem.MolFromSmarts("[nX2;$(n(:[c;R2]):c-[NX3;H2])]")
         hits = rw.GetSubstructMatches(n1)
         if len(hits) != 1:
@@ -289,6 +291,9 @@ def run_redock(
     n_poses: int = 9,
     seed: int = 42,
     protonation: str = "neutral",
+    rescore: bool = True,
+    rescore_device: str = "auto",
+    engine: str = "auto",
 ) -> dict:
     from rdkit import Chem
     from rdkit.Chem import rdMolAlign
@@ -316,7 +321,7 @@ def run_redock(
     neutral = rdMolStandardize.Uncharger().uncharge(Chem.Mol(crystal))
     neutral_smiles = Chem.MolToSmiles(neutral)
     if protonation == "neutral":
-        dock_smiles = neutral_smiles  # unchanged baseline behaviour
+        dock_smiles = neutral_smiles
     else:
         dock_smiles = _protonate_smiles(neutral_smiles, protonation)
     log.info("Ligand SMILES (stereo from crystal, %s): %s", protonation, dock_smiles)
@@ -328,10 +333,12 @@ def run_redock(
     poses_dir.mkdir(exist_ok=True)
     poses_path = poses_dir / f"{resname}_redock.pdbqt"
 
+    docker, active_engine = _resolve_docking_plugin(engine)
     log.info(
-        "Docking (exhaustiveness=%d, n_poses=%d, seed=%d) ...", exhaustiveness, n_poses, seed
+        "Docking with %s (exhaustiveness=%d, n_poses=%d, seed=%d) ...",
+        active_engine, exhaustiveness, n_poses, seed,
     )
-    get_plugin("vina").run(
+    docker.run(
         {
             "receptor_pdbqt": receptor["receptor_pdbqt"],
             "ligand_pdbqt": prepared["pdbqt"],
@@ -345,6 +352,24 @@ def run_redock(
         workdir,
     )
 
+    ai_scores: list[float] | None = None
+    rescore_backend: str | None = None
+    if rescore:
+        try:
+            rescore_out = get_plugin("pose_rescorer").run(
+                {
+                    "receptor_pdbqt": receptor["receptor_pdbqt"],
+                    "poses_pdbqt": str(poses_path),
+                    "out_pdbqt": str(poses_path),
+                    "device": rescore_device,
+                },
+                workdir,
+            )
+            ai_scores = rescore_out["ai_scores"]
+            rescore_backend = rescore_out["backend"]
+        except Exception as exc:
+            log.warning("AI pose rescoring skipped: %s", exc)
+
     models, scores = _pose_models(str(poses_path))
     if not models:
         raise RuntimeError(f"No poses found in {poses_path}")
@@ -352,11 +377,12 @@ def run_redock(
     poses = []
     for idx, atoms in enumerate(models):
         pose_mol = _mol_from_atoms(atoms, template)
-        rmsd = rdMolAlign.CalcRMS(pose_mol, crystal)  # in place, symmetry-aware, no alignment
+        rmsd = rdMolAlign.CalcRMS(pose_mol, crystal)
         poses.append(
             {
                 "pose": idx + 1,
                 "vina_score": scores[idx] if idx < len(scores) else None,
+                "ai_score": ai_scores[idx] if ai_scores and idx < len(ai_scores) else None,
                 "rmsd": round(rmsd, 3),
             }
         )
@@ -368,6 +394,9 @@ def run_redock(
         "seed": seed,
         "protonation": protonation,
         "exhaustiveness": exhaustiveness,
+        "docking_engine": active_engine,
+        "rescored": ai_scores is not None,
+        "rescore_backend": rescore_backend,
         "top_pose_rmsd": poses[0]["rmsd"],
         "best_rmsd_any_pose": min(p["rmsd"] for p in poses),
         "success_top_pose": poses[0]["rmsd"] <= SUCCESS_RMSD,

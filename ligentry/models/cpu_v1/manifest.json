@@ -1,0 +1,9 @@
+{
+  "tier": "cpu",
+  "version": "1.0.0",
+  "sha256": "5825d538eeaa623b7ad893f14e20dea25539d4a24c1a1377efd0cd893476c734",
+  "size_bytes": 25004,
+  "train_complexes": 5210,
+  "val_complexes": 790,
+  "best_val_top1_rate": 0.7101
+}

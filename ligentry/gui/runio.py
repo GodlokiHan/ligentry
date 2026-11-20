@@ -13,7 +13,7 @@ from pathlib import Path
 
 RESULT_FIELDS = [
     "rank", "name", "smiles", "best_isomer_smiles", "n_isomers",
-    "vina_score_kcal_mol", "status", "notes",
+    "ai_pose_score", "pred_pkd", "vina_score_kcal_mol", "status", "notes",
 ]
 
 
@@ -43,11 +43,7 @@ def _to_int(text: str | None, default: int = 1) -> int:
 
 
 def load_run(folder: str | Path) -> tuple[str, list[dict]]:
-    """Read results.csv from a run folder. Returns (pdb_id or "", rows).
-
-    Works with CSVs from before stereoisomer enumeration (missing columns get
-    defaults) and with CSVs that already carry a `notes` column.
-    """
+    """Read results.csv from a run folder. Returns (pdb_id or "", rows)."""
     folder = Path(folder)
     csv_path = folder / "results.csv"
     if not folder.is_dir():
@@ -68,6 +64,8 @@ def load_run(folder: str | Path) -> tuple[str, list[dict]]:
                     "smiles": smiles,
                     "best_isomer_smiles": (raw.get("best_isomer_smiles") or "").strip() or smiles,
                     "n_isomers": _to_int(raw.get("n_isomers")),
+                    "ai_pose_score": _to_float(raw.get("ai_pose_score")),
+                    "pred_pkd": _to_float(raw.get("pred_pkd")),
                     "vina_score_kcal_mol": _to_float(raw.get("vina_score_kcal_mol")),
                     "status": (raw.get("status") or "").strip(),
                     "notes": raw.get("notes") or "",
@@ -84,6 +82,8 @@ def _write_rows(path: Path, rows: list[dict]) -> None:
         writer.writeheader()
         for rank, row in enumerate(rows, start=1):
             score = row.get("vina_score_kcal_mol")
+            ai_score = row.get("ai_pose_score")
+            pred_pkd = row.get("pred_pkd")
             writer.writerow(
                 {
                     "rank": rank,
@@ -91,12 +91,14 @@ def _write_rows(path: Path, rows: list[dict]) -> None:
                     "smiles": row.get("smiles", ""),
                     "best_isomer_smiles": row.get("best_isomer_smiles", ""),
                     "n_isomers": row.get("n_isomers", 1),
+                    "ai_pose_score": "" if ai_score is None else ai_score,
+                    "pred_pkd": "" if pred_pkd is None else pred_pkd,
                     "vina_score_kcal_mol": "" if score is None else score,
                     "status": row.get("status", ""),
                     "notes": row.get("notes", ""),
                 }
             )
-    os.replace(tmp, path)  # never leave a half-written results.csv behind
+    os.replace(tmp, path)
 
 
 def save_results(folder: str | Path, rows: list[dict]) -> Path:
