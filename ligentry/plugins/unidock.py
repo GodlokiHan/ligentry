@@ -5,6 +5,7 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -14,23 +15,49 @@ from ligentry.core.plugin import Plugin, register
 log = logging.getLogger("ligentry.unidock")
 
 
+def _prepend_env_path(env: dict[str, str], var: str, directory: Path) -> None:
+    if not directory.is_dir():
+        return
+    sep = os.pathsep
+    parts = [str(directory)]
+    existing = env.get(var, "")
+    if existing:
+        parts.extend(p for p in existing.split(sep) if p)
+    env[var] = sep.join(parts)
+
+
 def _unidock_cmd_and_env() -> tuple[list[str], dict[str, str]]:
-    """Resolve the Uni-Dock executable and prepend its conda env `lib/` to LD_LIBRARY_PATH."""
+    """Resolve the Uni-Dock executable and configure library/PATH entries for the platform."""
     env = os.environ.copy()
     unidock_env = Path.home() / "micromamba" / "envs" / "unidock"
+
+    if sys.platform == "win32":
+        for lib_dir in (unidock_env / "Library" / "bin", unidock_env / "Scripts", unidock_env):
+            _prepend_env_path(env, "PATH", lib_dir)
+        for candidate in (
+            unidock_env / "Library" / "bin" / "unidock.exe",
+            unidock_env / "Scripts" / "unidock.exe",
+            unidock_env / "unidock.exe",
+        ):
+            if candidate.is_file():
+                return [str(candidate)], env
+        micromamba = shutil.which("micromamba")
+        if micromamba:
+            return [micromamba, "run", "-n", "unidock", "unidock.exe"], env
+        return [shutil.which("unidock") or "unidock"], env
+
     unidock_lib = unidock_env / "lib"
-    if unidock_lib.is_dir():
-        existing = env.get("LD_LIBRARY_PATH", "")
-        env["LD_LIBRARY_PATH"] = f"{unidock_lib}:{existing}" if existing else str(unidock_lib)
+    _prepend_env_path(env, "LD_LIBRARY_PATH", unidock_lib)
 
     unidock_bin = unidock_env / "bin" / "unidock"
     if unidock_bin.is_file():
         return [str(unidock_bin)], env
 
-    if shutil.which("micromamba"):
-        return ["micromamba", "run", "-n", "unidock", "unidock"], env
+    micromamba = shutil.which("micromamba")
+    if micromamba:
+        return [micromamba, "run", "-n", "unidock", "unidock"], env
 
-    return ["unidock"], env
+    return [shutil.which("unidock") or "unidock"], env
 
 
 def _parse_unidock_scores(pdbqt_path: Path) -> list[float]:
@@ -38,7 +65,7 @@ def _parse_unidock_scores(pdbqt_path: Path) -> list[float]:
     scores: list[float] = []
     if not pdbqt_path.is_file():
         return scores
-    for line in pdbqt_path.read_text().splitlines():
+    for line in pdbqt_path.read_text(encoding="utf-8", errors="replace").splitlines():
         if line.startswith("REMARK VINA RESULT"):
             parts = line.split()
             if len(parts) >= 4:
@@ -57,7 +84,7 @@ def _materialize_ligand(item: str | Path, scratch_dir: Path, idx: int) -> Path:
     if "\n" not in text and len(text) < 512 and Path(text).is_file():
         return Path(text).resolve()
     target = scratch_dir / f"lig_{idx}.pdbqt"
-    target.write_text(text)
+    target.write_text(text, encoding="utf-8")
     return target.resolve()
 
 
@@ -99,7 +126,15 @@ def _run_gpu_batch(
             "--seed", str(seed),
             "--verbosity", "1",
         ]
-        proc = subprocess.run(cmd, env=run_env, capture_output=True, text=True, check=False)
+        proc = subprocess.run(
+            cmd,
+            env=run_env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
         if proc.returncode != 0:
             raise RuntimeError(
                 f"Uni-Dock GPU batch failed (code {proc.returncode}): "

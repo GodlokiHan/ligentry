@@ -55,6 +55,13 @@ def refresh_caches(apps_dir: Path) -> None:
 
 
 def main() -> int:
+    if sys.platform != "linux":
+        print(
+            "Desktop launcher installation (.desktop / XDG) is only supported on Linux.",
+            file=sys.stderr,
+        )
+        return 1
+
     parser = argparse.ArgumentParser(description="Install the ligentry desktop launcher")
     parser.add_argument("--uninstall", action="store_true", help="remove the launcher and icon")
     args = parser.parse_args()
@@ -83,8 +90,8 @@ def main() -> int:
 
     apps_dir.mkdir(parents=True, exist_ok=True)
     icon_path.parent.mkdir(parents=True, exist_ok=True)
-    icon_path.write_text(ICON_SVG)
-    desktop_path.write_text(DESKTOP_TEMPLATE.format(exec_path=launcher))
+    icon_path.write_text(ICON_SVG, encoding="utf-8")
+    desktop_path.write_text(DESKTOP_TEMPLATE.format(exec_path=launcher), encoding="utf-8")
     desktop_path.chmod(0o755)
     refresh_caches(apps_dir)
 

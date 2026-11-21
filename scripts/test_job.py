@@ -40,7 +40,7 @@ with tempfile.TemporaryDirectory() as tmp:
         }
         spec.update(over)
         p = root / "job.json"
-        p.write_text(json.dumps(spec))
+        p.write_text(json.dumps(spec), encoding="utf-8")
         return p
 
     # SMILES job: options forwarded, STOP file wired to should_stop
@@ -49,7 +49,7 @@ with tempfile.TemporaryDirectory() as tmp:
     def fake_run(pdb_id, ligands, workdir, **kw):
         seen.update(pdb_id=pdb_id, ligands=ligands, workdir=workdir, **kw)
         seen["stop_before"] = kw["should_stop"]()
-        (Path(workdir) / "STOP").write_text("x")
+        (Path(workdir) / "STOP").write_text("x", encoding="utf-8")
         seen["stop_after"] = kw["should_stop"]()
         return []
 
@@ -69,7 +69,9 @@ with tempfile.TemporaryDirectory() as tmp:
         got.update(target=target, limit=limit)
         return [("CHEMBL1", "CCO")]
 
-    (work / "STOP").unlink()
+    stop_file = work / "STOP"
+    if stop_file.exists():
+        stop_file.unlink()
     code, out = run_main(write_spec(chembl_target="CHEMBL243", n_ligands=7),
                          run=lambda *a, **k: [], fetch=fake_fetch)
     check("ChEMBL target fetched with limit",
@@ -88,7 +90,7 @@ with tempfile.TemporaryDirectory() as tmp:
     check("exception -> exit 1 with ERROR line", code == 1 and "ERROR: boom" in out, out)
 
     bad = root / "bad.json"
-    bad.write_text("not json")
+    bad.write_text("not json", encoding="utf-8")
     code, out = run_main(bad)
     check("bad job file -> exit 2", code == 2 and out.startswith("ERROR: bad job file"), out)
     code, out = run_main(root / "missing.json")
@@ -98,7 +100,7 @@ with tempfile.TemporaryDirectory() as tmp:
     p = write_spec(pdb_id="ZZZZ")
     proc = subprocess.run(
         [sys.executable, "-u", "-m", "ligentry.gui.job", str(p)],
-        capture_output=True, text=True, timeout=120,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
     )
     check("subprocess: bad PDB id -> exit 1 and an ERROR line (module imports outside Qt)",
           proc.returncode == 1 and "ERROR:" in proc.stdout, (proc.stdout + proc.stderr)[-300:])

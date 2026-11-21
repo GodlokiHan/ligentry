@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import shutil
+import sys
 import tarfile
 import tempfile
 import urllib.request
@@ -36,6 +37,10 @@ class ModelStatus:
 
 
 def user_models_dir() -> Path:
+    if sys.platform == "win32":
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        base = Path(local_app_data) if local_app_data else Path.home() / "AppData" / "Local"
+        return base / "ligentry" / "models"
     xdg = os.environ.get("XDG_DATA_HOME")
     base = Path(xdg) if xdg else Path.home() / ".local" / "share"
     return base / "ligentry" / "models"
@@ -53,7 +58,9 @@ def detect_nvidia_gpu() -> bool:
     """Return True if an NVIDIA GPU is present on the system."""
     if shutil.which("nvidia-smi") is not None:
         return True
-    return Path("/dev/nvidia0").exists()
+    if sys.platform != "win32":
+        return Path("/dev/nvidia0").exists()
+    return False
 
 
 def available_ort_providers() -> list[str]:
@@ -73,7 +80,7 @@ def is_gpu_pack_installed() -> bool:
     manifest_file = d / "manifest.json"
     if manifest_file.is_file():
         try:
-            meta = json.loads(manifest_file.read_text())
+            meta = json.loads(manifest_file.read_text(encoding="utf-8"))
             expected = meta.get("sha256", "")
             if expected:
                 actual = hashlib.sha256(model_file.read_bytes()).hexdigest()
@@ -121,7 +128,7 @@ def install_gpu_pack_from_archive(
     archive_path: str | Path,
     expected_sha256: str = DEFAULT_GPU_PACK_SHA256,
 ) -> Path:
-    """Verify and extract a local `.tar.gz` GPU model pack into ~/.local/share/ligentry/models/gpu_v1."""
+    """Verify and extract a local `.tar.gz` GPU model pack into the user models directory."""
     src = Path(archive_path)
     if not src.is_file():
         raise FileNotFoundError(f"Archive not found: {src}")
@@ -136,11 +143,12 @@ def install_gpu_pack_from_archive(
 
     with tempfile.TemporaryDirectory(prefix="ligentry_gpu_pack_") as tmp:
         tmp_dir = Path(tmp)
+        tmp_root = tmp_dir.resolve()
         with tarfile.open(src, "r:gz") as tf:
-            # Safe extraction: disallow path traversal
+            # Safe extraction: disallow path traversal outside tmp_root
             for member in tf.getmembers():
                 member_path = (tmp_dir / member.name).resolve()
-                if not str(member_path).startswith(str(tmp_dir.resolve())):
+                if member_path != tmp_root and not member_path.is_relative_to(tmp_root):
                     raise ValueError(f"Unsafe path in archive: {member.name}")
             tf.extractall(tmp_dir)
 
