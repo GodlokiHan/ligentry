@@ -57,4 +57,5 @@ jobs:
         shell: pwsh
         run: |
           python scripts/test_stereo.py
+          python scripts/test_model_manager.py
           python -c "import onnxruntime as ort; from ligentry.core.model_manager import get_model_status, user_models_dir; print('ORT:', ort.__version__, ort.get_available_providers()); st = get_model_status(); print('Dir:', user_models_dir(), 'Tier:', st.active_tier, 'Model:', st.model_path)"
