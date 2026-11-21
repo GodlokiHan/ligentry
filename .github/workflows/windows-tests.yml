@@ -22,11 +22,12 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install scientific and GUI dependencies
+      - name: Install scientific, GUI, and package dependencies
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          pip install numpy scipy matplotlib PySide6 requests
+          pip install numpy scipy matplotlib PySide6 requests psutil
+          pip install --no-build-isolation --no-deps -e .
 
       - name: Run core PK/PD and help tests
         shell: pwsh
