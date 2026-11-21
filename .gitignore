@@ -8,3 +8,7 @@ runs/
 data/
 /models/
 *.tar.gz
+
+# Local Windows porting audit artifacts
+audit_windows.json
+scripts/audit_windows.py

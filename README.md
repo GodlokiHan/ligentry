@@ -2,7 +2,7 @@
 
 Open-source desktop app for computational drug design: GPU-accelerated molecular docking with an AI neural pose rescorer, an interactive 3D viewer, and a built-in validation benchmark, plus a pharmacokinetic/pharmacodynamic (PK/PD) simulator with sequential and simultaneous (joint) fitting, a built-in manual with a first-launch guide, and a small browser for looking up papers and databases. Protein-structure work is planned.
 
-**Status: early (v0.1.0).** Linux only for now. Windows is not supported yet.
+**Status: early (v0.1.0).** Supports **Linux** and **Windows** (tested on Python 3.11).
 
 ## What it does
 
@@ -59,11 +59,62 @@ The environment file pins the versions the benchmark baseline was measured with.
 1. **Uni-Dock GPU engine:** install `unidock` in a dedicated micromamba environment (`micromamba create -n unidock -c conda-forge unidock`) and symlink the `unidock` binary onto your `PATH`. Ligentry automatically detects `unidock` and configures its CUDA library path at runtime.
 2. **GPU AI rescorer model pack:** open `ligentry-gui`, go to **Tools > AI pose rescorer models...**, and install `ligentry-rescore-gpu-v1.tar.gz` from the GitHub Releases page (or from a local archive).
 
+## Install (Windows)
+
+Ligentry is tested on Windows (`windows-latest`, Python 3.11) across the PK/PD engine and fitting workflows, `PySide6` + `matplotlib` GUI windows, stereoisomer enumeration and ligand preparation (`rdkit`, `meeko`, `gemmi`), run/job I/O, and CPU `onnxruntime` inference.
+
+### 1. Create a Python 3.11 Environment & Install Dependencies
+
+Open **PowerShell** (`pwsh`), clone the repository, and create an isolated Python 3.11 environment using `venv` or `conda`/`micromamba`:
+
+**Option A: Standard Python `venv`**
+
+```powershell
+git clone https://github.com/GodlokiHan/ligentry.git
+cd ligentry
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+**Option B: Conda / Micromamba**
+
+```powershell
+git clone https://github.com/GodlokiHan/ligentry.git
+cd ligentry
+micromamba create -n ligentry -c conda-forge python=3.11
+micromamba activate ligentry
+```
+
+Next, upgrade `pip`, install build tools (`setuptools` and `wheel`, required for editable installs with `--no-build-isolation`), install the scientific, GUI, ONNX, and cheminformatics packages, and install `ligentry` in editable mode:
+
+```powershell
+python -m pip install --upgrade pip
+pip install setuptools wheel numpy scipy matplotlib PySide6 requests psutil onnxruntime rdkit meeko gemmi
+pip install --no-build-isolation --no-deps -e .
+```
+
+### 2. Optional 3D Viewer & External Docking Binaries on Windows
+
+- **Interactive 3D molecular viewer (`pyvista`):** If you want the embedded 3D pocket/pose viewer in the main GUI window, also install `pyvista` (`pip install pyvista`). Without `pyvista`, PK/PD simulation, fitting, Help/Web windows, and offline docking pipelines still work.
+- **External docking & receptor prep binaries:** To run full live docking jobs on Windows, ensure AutoDock Vina (`vina.exe`) or Uni-Dock and Open Babel (`obabel.exe`) are installed and available on your system `PATH` (for example via Conda/Micromamba `conda-forge` packages or official Windows releases).
+- **AI Rescorer Models:** The bundled `cpu_v1` ONNX model runs out of the box via `onnxruntime` (`CPUExecutionProvider`). Any downloaded model packs are stored under `%LOCALAPPDATA%\ligentry\models`.
+
+### 3. Launching & Headless Execution on Windows
+
+- **GUI & CLI launch:** With your Python 3.11 environment active, launch the GUI with `ligentry-gui` (or `python -m ligentry.gui.pkpd_window` for the standalone PK/PD simulator) and CLI commands with `ligentry ...`.
+- **Desktop shortcut note:** `scripts/install_launcher.py` creates XDG `.desktop` entries and is supported on **Linux only**. On Windows, launch from PowerShell or create a standard Windows shortcut pointing to your environment's `ligentry-gui.exe` (such as `.venv\Scripts\ligentry-gui.exe`).
+- **Headless / offscreen runs:** When running GUI test suites or automated scripts without an active desktop session, set:
+
+```powershell
+$env:QT_QPA_PLATFORM = "offscreen"
+$env:MPLBACKEND = "Agg"
+```
+
 ## Use
 
 ### Docking (GUI)
 
-Run `ligentry-gui`, or open **ligentry** from your application menu.
+Run `ligentry-gui` (or open **ligentry** from your Linux application menu).
 
 1. Enter a PDB ID with a bound ligand (for example `1HSG`).
 2. Enter a ChEMBL target ID (for example `CHEMBL243`), click **Load .smi / .csv...** to select a ligand library file, or paste SMILES, one per line as `SMILES [name]`.
@@ -74,9 +125,9 @@ Use **File > Open run...** to reload an earlier run folder without docking again
 
 ### PK/PD simulator
 
-Open it from **Tools > PK/PD simulator** (or the toolbar button) in the docking window, or run it on its own:
+Open it from **Tools > PK/PD simulator** (or the toolbar button) in the docking window, or run it on its own (Linux or Windows):
 
-```fish
+```bash
 python -m ligentry.gui.pkpd_window
 ```
 
@@ -93,7 +144,9 @@ The manual has a worked example with sample data you can save and fit (Help > li
 
 ### Command line
 
-```fish
+Works on both Linux and Windows with your environment active:
+
+```bash
 ligentry plugins
 ligentry dock --pdb 1HSG --chembl CHEMBL243 --n 20 --out runs/hiv_protease
 ligentry redock --pdb 1HSG --seed 42 --out runs/redock_1hsg
@@ -182,24 +235,39 @@ Each wrapped docking tool is a plugin behind a common interface, so engines can 
 
 ## Tests
 
+### Linux (`fish`)
+
 ```fish
 for t in scripts/test_*.py; echo $t; python $t | tail -2; end
 ```
 
-Each script ends with `ALL PASSED` or a count such as `1333 passed, 0 failed`. The PK/PD scripts are `test_pkpd`, `test_twocomp`, `test_effect`, `test_effect_compartment`, `test_observations`, `test_residuals`, `test_effect_residuals`, `test_pkpd_workflow`, `test_joint_fit`, `test_infusion_tlag`, `test_pkpd_window` and `test_pkpd_window_delayed`. They need only NumPy and SciPy, apart from the two window tests, which also need Qt.
+### Windows (`PowerShell`)
 
-The help scripts are `test_help` (manual, search, web helpers and guide logic; no Qt; it also checks that the manual still matches the program's shortcuts, defaults and CSV columns) and `test_help_gui` (Help window, guide dialog and Help menus, offscreen). To try the embedded web view in the second one too: `env LIGENTRY_TEST_WEB=1 python scripts/test_help_gui.py`.
+```powershell
+$env:QT_QPA_PLATFORM = "offscreen"
+$env:MPLBACKEND = "Agg"
+Get-ChildItem scripts\test_*.py | ForEach-Object {
+    Write-Host $_.Name
+    python $_.FullName | Select-Object -Last 2
+}
+```
+
+Each script ends with `ALL PASSED`, `Summary: 0 failed`, or a count such as `1343 passed, 0 failed`.
+
+- **PK/PD scripts:** `test_pkpd`, `test_twocomp`, `test_effect`, `test_effect_compartment`, `test_observations`, `test_residuals`, `test_effect_residuals`, `test_pkpd_workflow`, `test_joint_fit`, `test_infusion_tlag`, `test_pkpd_window`, and `test_pkpd_window_delayed`. They need only NumPy and SciPy, apart from the two window tests, which also need `PySide6` and `matplotlib`.
+- **Help & GUI scripts:** `test_help` (manual, search, web helpers, and guide logic; no Qt) and `test_help_gui` (Help window, guide dialog, and Help menus, offscreen; skips `pyvista` main-window checks if `pyvista` is not installed). To test the embedded web view as well, set `LIGENTRY_TEST_WEB=1`.
+- **Docking, stereo & model manager scripts:** `test_runio`, `test_job`, `test_stereo` (requires `rdkit`, `meeko`, and `gemmi`; mocks Vina and receptor prep), and `test_model_manager` (verifies `LOCALAPPDATA` / `XDG_DATA_HOME` model paths, SHA-256 checksums, and archive extraction).
 
 ## Roadmap
 
 - PK/PD: extravascular routes beyond oral, transit-compartment absorption, SBML import.
 - Docking: native PDBQT domain fine-tuning for the neural pose rescorer (aimed at `1HSG` and `4DFR`), OpenMM pose refinement, a protonation step if it improves the full benchmark, command-line flags for stereoisomer options.
 - Protein-structure workflows.
-- Replace the Open Babel subprocess with a pure-Python route, and port to Windows.
+- Replace the Open Babel subprocess with a pure-Python route, and expand Windows packaging/installer options.
 
 ## Privacy
 
-ligentry has no usage tracking. It contacts the network only when you run docking (to download the structure from the RCSB PDB and ligands from ChEMBL), when you explicitly click **Download & install GPU pack** in the AI Models dialog, and when you search or open a page in the Help window. Settings (recent runs, whether the guide was shown) are stored in `~/.config/ligentry/ligentry.conf`, and optional downloaded AI model packs are stored in `~/.local/share/ligentry/models/`. The Web tab keeps cookies and cache like any browser; **Web > Clear web data** in the Help window removes them.
+ligentry has no usage tracking. It contacts the network only when you run docking (to download the structure from the RCSB PDB and ligands from ChEMBL), when you explicitly click **Download & install GPU pack** in the AI Models dialog, and when you search or open a page in the Help window. Settings (recent runs, whether the guide was shown) are stored in `~/.config/ligentry/ligentry.conf` on Linux (or the Qt `QSettings` registry/config location on Windows), and optional downloaded AI model packs are stored in `~/.local/share/ligentry/models/` on Linux or `%LOCALAPPDATA%\ligentry\models` on Windows. The Web tab keeps cookies and cache like any browser; **Web > Clear web data** in the Help window removes them.
 
 ## License and credits
 
